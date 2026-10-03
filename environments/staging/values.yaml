@@ -1,0 +1,23 @@
+# Staging: the images CI published from main, pulled from GitHub Container Registry.
+# To release: put the wanted tag (sha-<commit> from the image's package page, or a version)
+# on the service's image line, commit, and `skaffold run -p staging`.
+imagePullSecrets: [ghcr-pull]      # made by scripts/secrets.py with GHCR_USER and GHCR_TOKEN set
+
+services:
+  likho-api: { image: ghcr.io/likho-ai/likho-api:latest }
+  likho-media: { image: ghcr.io/likho-ai/likho-media:latest }
+  likho-transcription: { image: ghcr.io/likho-ai/likho-transcription:latest }
+  likho-language: { image: ghcr.io/likho-ai/likho-language:latest }
+  likho-web-shell: { image: ghcr.io/likho-ai/likho-web-shell:latest }
+  likho-mfe-library: { image: ghcr.io/likho-ai/likho-mfe-library:latest }
+  likho-mfe-transcript: { image: ghcr.io/likho-ai/likho-mfe-transcript:latest }
+
+# Switch on once the staging domain is known; it must match PUBLIC_DOMAIN in
+# likho-infra/.env.staging.local (PUBLIC_ORIGIN and PUBLIC_URL are derived from it).
+ingress:
+  enabled: false
+  className: nginx
+  host: ""                          # e.g. staging.likho.example.com
+  tls:
+    enabled: false
+    clusterIssuer: ""               # e.g. letsencrypt-staging, with cert-manager installed

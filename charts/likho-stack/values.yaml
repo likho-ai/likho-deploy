@@ -1,0 +1,68 @@
+# The backing services, one replica each, each behind a Service with the name the likho services
+# use in their .env files: postgres, mongo, redis, nats, objectstore, meilisearch.
+#
+# Secrets come from one Secret made by scripts/secrets.py from likho-infra/.env.<environment>.local:
+#   POSTGRES_PASSWORD, LIKHO_API_DB_PASSWORD, LIKHO_MEDIA_DB_PASSWORD, LIKHO_LANGUAGE_DB_PASSWORD,
+#   MONGO_ROOT_PASSWORD, MONGO_PASSWORD, S3_ACCESS_KEY, S3_SECRET_KEY, MEILI_MASTER_KEY
+# plus a second Secret holding SeaweedFS's s3.json (the same S3 keys, in the file format it reads).
+secrets:
+  name: likho-stack-secrets
+  s3Config: likho-stack-s3
+
+# Storage class for every volume; empty = the cluster's default.
+storageClass: ""
+
+postgres:
+  enabled: true
+  image: postgres:17.11-alpine
+  storage: 5Gi
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { memory: 512Mi }
+
+mongo:
+  enabled: true
+  image: mongo:8.0.32
+  storage: 5Gi
+  wiredTigerCacheGB: "0.25"
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { memory: 768Mi }
+
+redis:
+  enabled: true
+  image: redis:8.10.2-alpine
+  maxmemory: 96mb
+  resources:
+    requests: { cpu: 50m, memory: 32Mi }
+    limits: { memory: 128Mi }
+
+nats:
+  enabled: true
+  image: nats:2.14.7-alpine
+  storage: 2Gi
+  serverName: likho
+  resources:
+    requests: { cpu: 100m, memory: 64Mi }
+    limits: { memory: 256Mi }
+  # The one-shot Job that creates the JetStream streams (a Helm hook after install and upgrade).
+  init:
+    image: natsio/nats-box:0.20.0
+
+objectstore:
+  enabled: true
+  image: chrislusf/seaweedfs:4.48
+  storage: 20Gi
+  volumeSizeLimitMB: 256
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { memory: 384Mi }
+  buckets: [likho-audio, likho-normalized, likho-peaks, likho-models]
+
+meilisearch:
+  enabled: true
+  image: getmeili/meilisearch:v1.54.2
+  storage: 2Gi
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { memory: 512Mi }

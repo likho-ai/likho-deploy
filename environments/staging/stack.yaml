@@ -1,0 +1,7 @@
+# The backing services in the staging cluster. For a managed database or object store, set
+# <part>.enabled: false here and point the service's .env.staging.local at it.
+postgres: { storage: 10Gi }
+mongo: { storage: 10Gi }
+nats: { storage: 5Gi }
+objectstore: { storage: 50Gi }
+meilisearch: { storage: 5Gi }

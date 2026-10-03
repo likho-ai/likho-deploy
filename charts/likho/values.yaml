@@ -1,0 +1,137 @@
+# Every Likho service, keyed by the name its Service gets (the name the other services' .env
+# files use: likho-media:5010, likho-transcription:5020, likho-language:5030).
+#
+# Where a service's settings come from, in order (a later one wins):
+#   config:  the ConfigMap <name>-env, filled from the repository's .env.<environment>
+#            (environments/<environment>/env.yaml, made by scripts/sync-env.py - never edited by hand)
+#   secret:  the Secret <name>-secrets, made by scripts/secrets.py from .env.<environment>.local
+#   env:     explicit values set here or in an environment's values.yaml (what differs in a cluster)
+#
+# image: the full reference. Skaffold sets it for the local cluster (built from the sibling
+# checkout); staging and production pin a tag from GitHub Container Registry in their values.yaml.
+
+imagePullSecrets: []        # [ghcr-pull] where the images are pulled from a private registry
+clusterDomain: cluster.local
+
+# Applied to every service container; a service may replace it with its own `securityContext`.
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+
+services:
+  likho-api:
+    image: ghcr.io/likho-ai/likho-api:latest
+    replicas: 1
+    ports: { http: 4000 }
+    readiness: { path: /readyz, port: http }
+    liveness: { path: /healthz, port: http }
+    secret: likho-api-secrets
+    config: {}
+    env: {}
+    resources:
+      requests: { cpu: 100m, memory: 192Mi }
+      limits: { memory: 512Mi }
+
+  likho-media:
+    image: ghcr.io/likho-ai/likho-media:latest
+    replicas: 1
+    ports: { http: 4010, grpc: 5010 }
+    readiness: { path: /readyz, port: http }
+    liveness: { path: /healthz, port: http }
+    secret: likho-media-secrets
+    config: {}
+    env: {}
+    resources:
+      requests: { cpu: 100m, memory: 128Mi }
+      limits: { memory: 768Mi }      # ffmpeg and peaks of one call at a time per worker
+
+  likho-transcription:
+    image: ghcr.io/likho-ai/likho-transcription:latest
+    replicas: 1
+    ports: { http: 4020, grpc: 5020 }
+    readiness: { path: /readyz, port: http, initialDelaySeconds: 20 }
+    liveness: { path: /healthz, port: http, initialDelaySeconds: 60 }
+    secret: likho-transcription-secrets
+    config: {}
+    env: {}
+    # A stopping pod finishes the job in hand first; a long call takes minutes.
+    terminationGracePeriodSeconds: 900
+    # The model cache (HF_HOME=/models): the turbo model is 1.6 GB, downloaded on the first job.
+    volumes:
+      - { name: models, mountPath: /models, size: 10Gi }
+    resources:
+      requests: { cpu: "1", memory: 2Gi }
+      limits: { memory: 4Gi }        # the turbo model in int8 needs about 2.5 GB while decoding
+
+  likho-language:
+    image: ghcr.io/likho-ai/likho-language:latest
+    replicas: 1
+    ports: { http: 4030, grpc: 5030 }
+    readiness: { path: /readyz, port: http }
+    liveness: { path: /healthz, port: http }
+    secret: likho-language-secrets
+    config: {}
+    env: {}
+    resources:
+      requests: { cpu: 100m, memory: 128Mi }
+      limits: { memory: 512Mi }
+
+  # The web app: static files behind nginx, no settings (the browser talks to the gateway's origin).
+  likho-web-shell:
+    image: ghcr.io/likho-ai/likho-web-shell:latest
+    replicas: 1
+    ports: { http: 80 }
+    readiness: { path: /healthz, port: http }
+    liveness: { path: /healthz, port: http }
+    securityContext: {}            # the nginx image starts as root and drops to nginx itself
+    resources:
+      requests: { cpu: 10m, memory: 16Mi }
+      limits: { memory: 64Mi }
+  likho-mfe-library:
+    image: ghcr.io/likho-ai/likho-mfe-library:latest
+    replicas: 1
+    ports: { http: 80 }
+    readiness: { path: /healthz, port: http }
+    liveness: { path: /healthz, port: http }
+    securityContext: {}
+    resources:
+      requests: { cpu: 10m, memory: 16Mi }
+      limits: { memory: 64Mi }
+  likho-mfe-transcript:
+    image: ghcr.io/likho-ai/likho-mfe-transcript:latest
+    replicas: 1
+    ports: { http: 80 }
+    readiness: { path: /healthz, port: http }
+    liveness: { path: /healthz, port: http }
+    securityContext: {}
+    resources:
+      requests: { cpu: 10m, memory: 16Mi }
+      limits: { memory: 64Mi }
+
+# The gateway: one address for the web app and every API (nginx, the same routes as
+# likho-infra/nginx/nginx.conf, with the cluster's services as upstreams).
+gateway:
+  image: nginx:1.30.5-alpine
+  replicas: 1
+  maxBodySize: 1g             # call recordings are uploaded through /media
+  service:
+    type: ClusterIP           # NodePort or LoadBalancer where no Ingress controller fronts it
+    port: 80
+    nodePort: null
+  # /mfe/manifest.json: which remote entry each app is at. A release of one app changes one line.
+  manifest:
+    library: /mfe/library/remoteEntry.js
+    transcript: /mfe/transcript/remoteEntry.js
+  resources:
+    requests: { cpu: 50m, memory: 32Mi }
+    limits: { memory: 128Mi }
+
+# The public hostname, through the cluster's Ingress controller.
+ingress:
+  enabled: false
+  className: nginx
+  host: ""
+  annotations: {}
+  tls:
+    enabled: false
+    secretName: likho-tls
+    clusterIssuer: ""        # cert-manager issuer, e.g. letsencrypt; empty = bring your own Secret

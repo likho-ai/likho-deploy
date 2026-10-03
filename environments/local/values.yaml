@@ -1,0 +1,27 @@
+# The local cluster (minikube): the staging configuration on your machine. Skaffold builds the
+# images from the sibling checkouts and sets them; the settings are environments/staging/env.yaml
+# and the Secrets come from the .env.staging.local files. Only the address and the first admin
+# differ from staging, and the pods are sized for one machine.
+services:
+  likho-api:
+    env:
+      PUBLIC_ORIGIN: http://localhost:8080          # skaffold forwards the gateway here
+      BOOTSTRAP_ADMIN_EMAIL: admin@example.com      # the development login, as in .env.development
+      BOOTSTRAP_ADMIN_PASSWORD: admin-password-1
+    resources:
+      requests: { cpu: 50m, memory: 128Mi }
+      limits: { memory: 512Mi }
+  likho-media:
+    env:
+      PUBLIC_URL: http://localhost:8080
+    resources:
+      requests: { cpu: 50m, memory: 64Mi }
+      limits: { memory: 768Mi }
+  likho-transcription:
+    resources:
+      requests: { cpu: 500m, memory: 1Gi }
+      limits: { memory: 3584Mi }
+  likho-language:
+    resources:
+      requests: { cpu: 50m, memory: 64Mi }
+      limits: { memory: 512Mi }

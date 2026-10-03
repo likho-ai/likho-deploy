@@ -1,0 +1,78 @@
+{{- if .Values.mongo.enabled }}
+# MongoDB with authentication: a root user and the login likho-transcription uses, both created on
+# the first start from the Secret.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mongo-init
+  labels: {{- include "likho-stack.labels" . | nindent 4 }}
+data:
+  10-users.js: |
+    // The login the transcription service uses (its MONGO_URL says authSource=admin).
+    db.getSiblingDB('admin').createUser({
+      user: 'likho_transcription',
+      pwd: process.env.MONGO_PASSWORD,
+      roles: [{ role: 'readWrite', db: 'likho_transcription' }],
+    });
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongo
+  labels: {{- include "likho-stack.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  selector: {{- include "likho-stack.selector" "mongo" | nindent 4 }}
+  ports:
+    - name: mongo
+      port: 27017
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mongo
+  labels: {{- include "likho-stack.labels" . | nindent 4 }}
+spec:
+  serviceName: mongo
+  replicas: 1
+  selector:
+    matchLabels: {{- include "likho-stack.selector" "mongo" | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "likho-stack.selector" "mongo" | nindent 8 }}
+    spec:
+      containers:
+        - name: mongo
+          image: {{ .Values.mongo.image | quote }}
+          args: ["--wiredTigerCacheSizeGB", {{ .Values.mongo.wiredTigerCacheGB | quote }}]
+          ports: [{ name: mongo, containerPort: 27017 }]
+          env:
+            - name: MONGO_INITDB_ROOT_USERNAME
+              value: root
+            - name: MONGO_INITDB_ROOT_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ .Values.secrets.name }}, key: MONGO_ROOT_PASSWORD } }
+            - name: MONGO_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ .Values.secrets.name }}, key: MONGO_PASSWORD } }
+          volumeMounts:
+            - { name: data, mountPath: /data/db }
+            - { name: init, mountPath: /docker-entrypoint-initdb.d, readOnly: true }
+          readinessProbe:
+            exec: { command: [mongosh, --quiet, --eval, "db.adminCommand('ping').ok"] }
+            periodSeconds: 5
+            timeoutSeconds: 5
+          livenessProbe:
+            exec: { command: [mongosh, --quiet, --eval, "db.adminCommand('ping').ok"] }
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+          resources: {{- toYaml .Values.mongo.resources | nindent 12 }}
+      volumes:
+        - name: init
+          configMap: { name: mongo-init }
+  volumeClaimTemplates:
+    - metadata: { name: data }
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- include "likho-stack.storageClass" . | nindent 8 }}
+        resources: { requests: { storage: {{ .Values.mongo.storage }} } }
+{{- end }}

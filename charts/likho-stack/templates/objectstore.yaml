@@ -1,0 +1,134 @@
+{{- if .Values.objectstore.enabled }}
+# SeaweedFS as the S3 object store: audio, playback copies, waveform peaks, models.
+# The S3 keys come from the s3.json Secret; the buckets are created by a Job after every
+# install and upgrade.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: objectstore-config
+  labels: {{- include "likho-stack.labels" . | nindent 4 }}
+data:
+  master.toml: |
+    # Every bucket is its own collection of volumes. By default SeaweedFS reserves 7 volumes for
+    # a collection the first time something is written to it, which uses up a small store after
+    # two buckets: writes to the third then hang. One volume at a time is enough; another is
+    # added when a volume is full.
+    [master.volume_growth]
+    copy_1 = 1
+    copy_2 = 2
+    copy_3 = 3
+    copy_other = 1
+  buckets.sh: |
+    #!/bin/sh
+    # Creates the buckets. Safe to run again.
+    set -eu
+    for i in $(seq 1 60); do
+      wget -qO- http://objectstore:9333/cluster/healthz >/dev/null 2>&1 && break
+      sleep 2
+    done
+    for bucket in {{ join " " .Values.objectstore.buckets }}; do
+      echo "s3.bucket.create -name $bucket" | weed shell -master=objectstore:9333 >/dev/null 2>&1 || true
+    done
+    echo "s3.bucket.list" | weed shell -master=objectstore:9333
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: objectstore
+  labels: {{- include "likho-stack.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  selector: {{- include "likho-stack.selector" "objectstore" | nindent 4 }}
+  ports:
+    - name: s3
+      port: 8333
+    - name: master
+      port: 9333
+    - name: volume
+      port: 8080
+    - name: filer
+      port: 8888
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: objectstore
+  labels: {{- include "likho-stack.labels" . | nindent 4 }}
+spec:
+  serviceName: objectstore
+  replicas: 1
+  selector:
+    matchLabels: {{- include "likho-stack.selector" "objectstore" | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "likho-stack.selector" "objectstore" | nindent 8 }}
+    spec:
+      containers:
+        - name: seaweedfs
+          image: {{ .Values.objectstore.image | quote }}
+          args:
+            - server
+            - -dir=/data
+            - -s3
+            - -s3.port=8333
+            - -s3.config=/etc/seaweedfs/s3.json
+            - -volume.max=100
+            - -master.volumeSizeLimitMB={{ .Values.objectstore.volumeSizeLimitMB }}
+          ports:
+            - { name: s3, containerPort: 8333 }
+            - { name: master, containerPort: 9333 }
+            - { name: volume, containerPort: 8080 }
+            - { name: filer, containerPort: 8888 }
+          volumeMounts:
+            - { name: data, mountPath: /data }
+            - { name: config, mountPath: /etc/seaweedfs/master.toml, subPath: master.toml, readOnly: true }
+            - { name: s3, mountPath: /etc/seaweedfs/s3.json, subPath: s3.json, readOnly: true }
+          readinessProbe:
+            httpGet: { path: /cluster/healthz, port: master }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /cluster/healthz, port: master }
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          resources: {{- toYaml .Values.objectstore.resources | nindent 12 }}
+      volumes:
+        - name: config
+          configMap: { name: objectstore-config }
+        - name: s3
+          secret: { secretName: {{ .Values.secrets.s3Config }} }
+  volumeClaimTemplates:
+    - metadata: { name: data }
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- include "likho-stack.storageClass" . | nindent 8 }}
+        resources: { requests: { storage: {{ .Values.objectstore.storage }} } }
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: objectstore-buckets
+  labels: {{- include "likho-stack.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 6
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels: {{- include "likho-stack.selector" "objectstore-buckets" | nindent 8 }}
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: buckets
+          image: {{ .Values.objectstore.image | quote }}
+          command: [sh, /scripts/buckets.sh]
+          volumeMounts:
+            - { name: scripts, mountPath: /scripts, readOnly: true }
+          resources:
+            requests: { cpu: 50m, memory: 32Mi }
+            limits: { memory: 128Mi }
+      volumes:
+        - name: scripts
+          configMap: { name: objectstore-config }
+{{- end }}

@@ -1,0 +1,9 @@
+apiVersion: v2
+name: likho-stack
+description: The backing services Likho needs inside a cluster - PostgreSQL, MongoDB, Redis, NATS JetStream, SeaweedFS (S3) and Meilisearch - with the users, streams and buckets the services expect. One replica each; for a managed database or object store, disable the part here and point the service's .env.<environment>.local at it.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/likho-ai/likho-deploy
+sources:
+  - https://github.com/likho-ai/likho-infra

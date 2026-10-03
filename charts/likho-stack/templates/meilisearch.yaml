@@ -1,0 +1,56 @@
+{{- if .Values.meilisearch.enabled }}
+# Meilisearch: the search index (used from Wave 2's likho-search).
+apiVersion: v1
+kind: Service
+metadata:
+  name: meilisearch
+  labels: {{- include "likho-stack.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  selector: {{- include "likho-stack.selector" "meilisearch" | nindent 4 }}
+  ports:
+    - name: http
+      port: 7700
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: meilisearch
+  labels: {{- include "likho-stack.labels" . | nindent 4 }}
+spec:
+  serviceName: meilisearch
+  replicas: 1
+  selector:
+    matchLabels: {{- include "likho-stack.selector" "meilisearch" | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "likho-stack.selector" "meilisearch" | nindent 8 }}
+    spec:
+      containers:
+        - name: meilisearch
+          image: {{ .Values.meilisearch.image | quote }}
+          ports: [{ name: http, containerPort: 7700 }]
+          env:
+            - name: MEILI_ENV
+              value: production
+            - name: MEILI_NO_ANALYTICS
+              value: "true"
+            - name: MEILI_MASTER_KEY
+              valueFrom: { secretKeyRef: { name: {{ .Values.secrets.name }}, key: MEILI_MASTER_KEY } }
+          volumeMounts:
+            - { name: data, mountPath: /meili_data }
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          resources: {{- toYaml .Values.meilisearch.resources | nindent 12 }}
+  volumeClaimTemplates:
+    - metadata: { name: data }
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- include "likho-stack.storageClass" . | nindent 8 }}
+        resources: { requests: { storage: {{ .Values.meilisearch.storage }} } }
+{{- end }}

@@ -1,0 +1,136 @@
+{{- /*
+One ConfigMap, one Service and one Deployment per entry of .Values.services (and a
+PersistentVolumeClaim per volume it asks for). The container's environment is the ConfigMap,
+then the Secret, then the explicit `env` values - a later source wins.
+*/ -}}
+{{- range $name, $svc := .Values.services }}
+{{- if not (and (hasKey $svc "enabled") (not $svc.enabled)) }}
+{{- $probePort := "http" }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}-env
+  labels: {{- include "likho.labels" $ | nindent 4 }}
+data:
+  {{- range $key, $value := ($svc.config | default dict) }}
+  {{ $key }}: {{ $value | toString | quote }}
+  {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels: {{- include "likho.labels" $ | nindent 4 }}
+spec:
+  selector: {{- include "likho.selector" $name | nindent 4 }}
+  ports:
+    {{- range $portName, $port := $svc.ports }}
+    - name: {{ $portName }}
+      port: {{ $port }}
+      targetPort: {{ $portName }}
+    {{- end }}
+{{- range $volume := ($svc.volumes | default list) }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $name }}-{{ $volume.name }}
+  labels: {{- include "likho.labels" $ | nindent 4 }}
+spec:
+  accessModes: [ReadWriteOnce]
+  {{- if $volume.storageClass }}
+  storageClassName: {{ $volume.storageClass | quote }}
+  {{- end }}
+  resources: { requests: { storage: {{ $volume.size }} } }
+{{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels: {{- include "likho.labels" $ | nindent 4 }}
+spec:
+  replicas: {{ $svc.replicas | default 1 }}
+  {{- if $svc.volumes }}
+  strategy: { type: Recreate }   # a ReadWriteOnce volume: the new pod waits for the old one
+  {{- end }}
+  selector:
+    matchLabels: {{- include "likho.selector" $name | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "likho.selector" $name | nindent 8 }}
+      annotations:
+        # A changed setting restarts the pods, so a ConfigMap edit is never silently ignored.
+        checksum/config: {{ ($svc.config | default dict) | toJson | sha256sum }}
+    spec:
+      {{- with $svc.terminationGracePeriodSeconds }}
+      terminationGracePeriodSeconds: {{ . }}
+      {{- end }}
+      {{- with $.Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- range . }}
+        - name: {{ . }}
+        {{- end }}
+      {{- end }}
+      securityContext:
+        seccompProfile: { type: RuntimeDefault }
+        {{- if $svc.volumes }}
+        # The images run as uid 10001; the volume is made writable for that group.
+        fsGroup: {{ $svc.fsGroup | default 10001 }}
+        fsGroupChangePolicy: OnRootMismatch
+        {{- end }}
+      containers:
+        - name: {{ $name }}
+          image: {{ $svc.image | quote }}
+          imagePullPolicy: {{ include "likho.pullPolicy" $svc.image }}
+          securityContext: {{- toYaml (hasKey $svc "securityContext" | ternary $svc.securityContext $.Values.containerSecurityContext) | nindent 12 }}
+          ports:
+            {{- range $portName, $port := $svc.ports }}
+            - name: {{ $portName }}
+              containerPort: {{ $port }}
+            {{- end }}
+          envFrom:
+            - configMapRef: { name: {{ $name }}-env }
+            {{- if $svc.secret }}
+            - secretRef: { name: {{ $svc.secret }} }
+            {{- end }}
+          {{- with $svc.env }}
+          env:
+            {{- range $key, $value := . }}
+            - name: {{ $key }}
+              value: {{ $value | toString | quote }}
+            {{- end }}
+          {{- end }}
+          {{- with $svc.readiness }}
+          readinessProbe:
+            httpGet: { path: {{ .path }}, port: {{ .port | default $probePort }} }
+            initialDelaySeconds: {{ .initialDelaySeconds | default 5 }}
+            periodSeconds: {{ .periodSeconds | default 5 }}
+            timeoutSeconds: 3
+          {{- end }}
+          {{- with $svc.liveness }}
+          livenessProbe:
+            httpGet: { path: {{ .path }}, port: {{ .port | default $probePort }} }
+            initialDelaySeconds: {{ .initialDelaySeconds | default 30 }}
+            periodSeconds: {{ .periodSeconds | default 15 }}
+            timeoutSeconds: 3
+            failureThreshold: 4
+          {{- end }}
+          {{- with $svc.volumes }}
+          volumeMounts:
+            {{- range . }}
+            - name: {{ .name }}
+              mountPath: {{ .mountPath }}
+            {{- end }}
+          {{- end }}
+          resources: {{- toYaml ($svc.resources | default dict) | nindent 12 }}
+      {{- with $svc.volumes }}
+      volumes:
+        {{- range . }}
+        - name: {{ .name }}
+          persistentVolumeClaim: { claimName: {{ $name }}-{{ .name }} }
+        {{- end }}
+      {{- end }}
+{{- end }}
+{{- end }}

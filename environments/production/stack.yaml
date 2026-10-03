@@ -1,0 +1,22 @@
+# The backing services in the production cluster: one replica each, on persistent volumes.
+# A managed PostgreSQL, MongoDB or S3 is the step up: set <part>.enabled: false here and point
+# the service's .env.production.local at it. Back the volumes up with the cluster's snapshots.
+postgres:
+  storage: 50Gi
+  resources: { requests: { cpu: 500m, memory: 1Gi }, limits: { memory: 2Gi } }
+mongo:
+  storage: 50Gi
+  wiredTigerCacheGB: "1"
+  resources: { requests: { cpu: 500m, memory: 1Gi }, limits: { memory: 2Gi } }
+redis:
+  maxmemory: 256mb
+  resources: { requests: { cpu: 100m, memory: 64Mi }, limits: { memory: 320Mi } }
+nats:
+  storage: 20Gi
+objectstore:
+  storage: 500Gi                    # about 10 MB per hour of telephone audio plus the playback copies
+  volumeSizeLimitMB: 1024
+  resources: { requests: { cpu: 500m, memory: 512Mi }, limits: { memory: 1Gi } }
+meilisearch:
+  storage: 20Gi
+  resources: { requests: { cpu: 500m, memory: 512Mi }, limits: { memory: 2Gi } }

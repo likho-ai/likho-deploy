@@ -1,0 +1,6 @@
+# Rendered output and local tooling state
+/rendered/
+*.tgz
+/charts/*/charts/
+.skaffold/
+__pycache__/

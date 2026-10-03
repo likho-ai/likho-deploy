@@ -1,0 +1,13 @@
+Likho is installed in namespace {{ .Release.Namespace }}.
+
+{{- if .Values.ingress.enabled }}
+Address: http{{ if .Values.ingress.tls.enabled }}s{{ end }}://{{ .Values.ingress.host }}
+{{- else }}
+No Ingress. Reach the gateway with
+  kubectl -n {{ .Release.Namespace }} port-forward svc/likho-gateway 8080:{{ .Values.gateway.service.port }}
+and open http://localhost:8080.
+{{- end }}
+
+What is running:
+  kubectl -n {{ .Release.Namespace }} get pods
+The first admin's email and password are in likho-api's .env.<environment>.local (BOOTSTRAP_ADMIN_*).

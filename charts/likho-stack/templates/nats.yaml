@@ -1,0 +1,120 @@
+{{- if .Values.nats.enabled }}
+# NATS JetStream: the event bus. The streams are created by a Job after every install and upgrade
+# (the same script as likho-infra/nats/streams.sh; the subjects are documented in likho-contracts).
+apiVersion: v1
+kind: Service
+metadata:
+  name: nats
+  labels: {{- include "likho-stack.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  selector: {{- include "likho-stack.selector" "nats" | nindent 4 }}
+  ports:
+    - name: client
+      port: 4222
+    - name: monitor
+      port: 8222
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: nats
+  labels: {{- include "likho-stack.labels" . | nindent 4 }}
+spec:
+  serviceName: nats
+  replicas: 1
+  selector:
+    matchLabels: {{- include "likho-stack.selector" "nats" | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "likho-stack.selector" "nats" | nindent 8 }}
+    spec:
+      containers:
+        - name: nats
+          image: {{ .Values.nats.image | quote }}
+          args: ["-js", "-sd", "/data", "-m", "8222", "-n", {{ .Values.nats.serverName | quote }}]
+          ports:
+            - { name: client, containerPort: 4222 }
+            - { name: monitor, containerPort: 8222 }
+          volumeMounts:
+            - { name: data, mountPath: /data }
+          readinessProbe:
+            httpGet: { path: /healthz, port: monitor }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: monitor }
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          resources: {{- toYaml .Values.nats.resources | nindent 12 }}
+  volumeClaimTemplates:
+    - metadata: { name: data }
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- include "likho-stack.storageClass" . | nindent 8 }}
+        resources: { requests: { storage: {{ .Values.nats.storage }} } }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nats-streams
+  labels: {{- include "likho-stack.labels" . | nindent 4 }}
+data:
+  streams.sh: |
+    #!/bin/sh
+    # Creates the JetStream streams. Safe to run again: existing streams are updated in place.
+    set -eu
+    NATS="nats --server nats://nats:4222"
+    for i in $(seq 1 60); do
+      $NATS server check connection >/dev/null 2>&1 && break
+      sleep 2
+    done
+    ensure() {
+      name="$1"; shift
+      if $NATS stream info "$name" >/dev/null 2>&1; then
+        $NATS stream edit "$name" "$@" --force >/dev/null
+        echo "updated stream $name"
+      else
+        $NATS stream add "$name" "$@" --storage file --retention limits --discard old \
+          --replicas 1 --dupe-window 2m --defaults >/dev/null
+        echo "created stream $name"
+      fi
+    }
+    # Business events, kept 30 days.
+    ensure LIKHO \
+      --subjects "likho.media.*,likho.transcription.*,likho.vocabulary.*,likho.insights.*,likho.dead" \
+      --max-age 30d
+    # Live transcript lines: many small messages, only useful while a job runs.
+    ensure LIKHO_LIVE --subjects "likho.live.*" --max-age 1d
+    # Corrections made by people: training data, never expired.
+    ensure LIKHO_KEEP --subjects "likho.transcript.*"
+    $NATS stream ls
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nats-streams
+  labels: {{- include "likho-stack.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 6
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels: {{- include "likho-stack.selector" "nats-streams" | nindent 8 }}
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: streams
+          image: {{ .Values.nats.init.image | quote }}
+          command: [sh, /scripts/streams.sh]
+          volumeMounts:
+            - { name: scripts, mountPath: /scripts, readOnly: true }
+          resources:
+            requests: { cpu: 50m, memory: 32Mi }
+            limits: { memory: 64Mi }
+      volumes:
+        - name: scripts
+          configMap: { name: nats-streams }
+{{- end }}

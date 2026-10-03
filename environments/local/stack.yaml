@@ -1,0 +1,6 @@
+# The backing services in the local cluster: small volumes, one machine.
+postgres: { storage: 2Gi }
+mongo: { storage: 2Gi }
+nats: { storage: 1Gi }
+objectstore: { storage: 10Gi }
+meilisearch: { storage: 1Gi }

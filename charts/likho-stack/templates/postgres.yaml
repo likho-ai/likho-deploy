@@ -1,0 +1,87 @@
+{{- if .Values.postgres.enabled }}
+# PostgreSQL: one database and one login per service, created on the first start from the
+# passwords in the Secret (the script runs only while the data directory is empty).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init
+  labels: {{- include "likho-stack.labels" . | nindent 4 }}
+data:
+  10-users.sh: |
+    #!/bin/sh
+    # One database and one login per service. No service reads another service's tables.
+    set -eu
+    psql -v ON_ERROR_STOP=1 --username postgres --dbname postgres <<SQL
+    CREATE ROLE likho_api      LOGIN PASSWORD '$LIKHO_API_DB_PASSWORD';
+    CREATE ROLE likho_media    LOGIN PASSWORD '$LIKHO_MEDIA_DB_PASSWORD';
+    CREATE ROLE likho_language LOGIN PASSWORD '$LIKHO_LANGUAGE_DB_PASSWORD';
+    CREATE DATABASE likho_api      OWNER likho_api;
+    CREATE DATABASE likho_media    OWNER likho_media;
+    CREATE DATABASE likho_language OWNER likho_language;
+    REVOKE CONNECT ON DATABASE likho_api      FROM PUBLIC;
+    REVOKE CONNECT ON DATABASE likho_media    FROM PUBLIC;
+    REVOKE CONNECT ON DATABASE likho_language FROM PUBLIC;
+    SQL
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  labels: {{- include "likho-stack.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  selector: {{- include "likho-stack.selector" "postgres" | nindent 4 }}
+  ports:
+    - name: postgres
+      port: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  labels: {{- include "likho-stack.labels" . | nindent 4 }}
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels: {{- include "likho-stack.selector" "postgres" | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "likho-stack.selector" "postgres" | nindent 8 }}
+    spec:
+      containers:
+        - name: postgres
+          image: {{ .Values.postgres.image | quote }}
+          ports: [{ name: postgres, containerPort: 5432 }]
+          env:
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+            - name: POSTGRES_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ .Values.secrets.name }}, key: POSTGRES_PASSWORD } }
+            - name: LIKHO_API_DB_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ .Values.secrets.name }}, key: LIKHO_API_DB_PASSWORD } }
+            - name: LIKHO_MEDIA_DB_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ .Values.secrets.name }}, key: LIKHO_MEDIA_DB_PASSWORD } }
+            - name: LIKHO_LANGUAGE_DB_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ .Values.secrets.name }}, key: LIKHO_LANGUAGE_DB_PASSWORD } }
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/postgresql/data }
+            - { name: init, mountPath: /docker-entrypoint-initdb.d, readOnly: true }
+          readinessProbe:
+            exec: { command: [pg_isready, -U, postgres] }
+            periodSeconds: 5
+          livenessProbe:
+            exec: { command: [pg_isready, -U, postgres] }
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          resources: {{- toYaml .Values.postgres.resources | nindent 12 }}
+      volumes:
+        - name: init
+          configMap: { name: postgres-init, defaultMode: 0555 }
+  volumeClaimTemplates:
+    - metadata: { name: data }
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- include "likho-stack.storageClass" . | nindent 8 }}
+        resources: { requests: { storage: {{ .Values.postgres.storage }} } }
+{{- end }}

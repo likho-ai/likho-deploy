@@ -1,0 +1,49 @@
+# Production: pinned images only (never a floating tag), two replicas of what the browser
+# talks to, the public hostname with TLS from cert-manager.
+# To release: put the tested tag (sha-<commit> or a version) on the image line, commit, and
+# `skaffold run -p production`. Rolling back is the same change the other way.
+imagePullSecrets: [ghcr-pull]
+
+services:
+  likho-api:
+    image: ghcr.io/likho-ai/likho-api:latest     # CHANGE to a pinned tag before the first release
+    replicas: 2
+    resources:
+      requests: { cpu: 250m, memory: 256Mi }
+      limits: { memory: 1Gi }
+  likho-media:
+    image: ghcr.io/likho-ai/likho-media:latest
+    replicas: 2
+    resources:
+      requests: { cpu: 250m, memory: 256Mi }
+      limits: { memory: 1Gi }
+  likho-transcription:
+    image: ghcr.io/likho-ai/likho-transcription:latest
+    replicas: 1                                   # one model in memory per replica; scale by nodes
+    resources:
+      requests: { cpu: "2", memory: 3Gi }
+      limits: { memory: 6Gi }
+  likho-language:
+    image: ghcr.io/likho-ai/likho-language:latest
+    replicas: 2
+  likho-web-shell:
+    image: ghcr.io/likho-ai/likho-web-shell:latest
+    replicas: 2
+  likho-mfe-library:
+    image: ghcr.io/likho-ai/likho-mfe-library:latest
+    replicas: 2
+  likho-mfe-transcript:
+    image: ghcr.io/likho-ai/likho-mfe-transcript:latest
+    replicas: 2
+
+gateway:
+  replicas: 2
+
+ingress:
+  enabled: false                    # switch on with the production domain
+  className: nginx
+  host: ""                          # must match PUBLIC_DOMAIN in likho-infra/.env.production.local
+  tls:
+    enabled: true
+    secretName: likho-tls
+    clusterIssuer: letsencrypt

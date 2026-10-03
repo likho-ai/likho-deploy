@@ -1,0 +1,50 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  charts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: v4.3.0
+      - name: Install kubeconform
+        run: |
+          curl -sSL https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz | tar xz
+          sudo mv kubeconform /usr/local/bin/
+      - name: Lint
+        run: |
+          helm lint charts/likho-stack -f environments/local/stack.yaml
+          helm lint charts/likho -f environments/staging/env.yaml -f environments/local/values.yaml
+      - name: Render every environment and check the objects against the Kubernetes schemas
+        run: |
+          set -eu
+          check() { kubeconform -strict -summary -ignore-missing-schemas; }
+          helm template likho-stack charts/likho-stack -n likho -f environments/local/stack.yaml | check
+          helm template likho charts/likho -n likho -f environments/staging/env.yaml -f environments/local/values.yaml | check
+          for env in staging production; do
+            helm template likho-stack charts/likho-stack -n likho-$env -f environments/$env/stack.yaml | check
+            helm template likho charts/likho -n likho-$env -f environments/$env/env.yaml -f environments/$env/values.yaml \
+              --set ingress.enabled=true --set ingress.host=likho.example.com | check
+          done
+      - name: Scripts compile
+        run: python3 -m py_compile scripts/sync-env.py scripts/secrets.py
+
+  skaffold:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Skaffold
+        run: |
+          curl -sSLo skaffold https://storage.googleapis.com/skaffold/releases/v2.25.0/skaffold-linux-amd64
+          chmod +x skaffold && sudo mv skaffold /usr/local/bin/
+      - name: The configuration parses, in every profile
+        run: |
+          skaffold diagnose --yaml-only > /dev/null
+          skaffold diagnose --yaml-only -p staging > /dev/null
+          skaffold diagnose --yaml-only -p production > /dev/null
