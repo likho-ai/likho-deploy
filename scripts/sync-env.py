@@ -15,7 +15,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent.parent
 ROOT = HERE.parent
-SERVICES = ("likho-api", "likho-media", "likho-transcription", "likho-language", "likho-connector-ameyo")
+SERVICES = ("likho-api", "likho-media", "likho-transcription", "likho-language", "likho-search", "likho-connector-ameyo")
 ENVIRONMENTS = ("staging", "production")
 
 

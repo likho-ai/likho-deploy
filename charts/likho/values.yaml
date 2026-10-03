@@ -81,6 +81,20 @@ services:
       requests: { cpu: 100m, memory: 128Mi }
       limits: { memory: 512Mi }
 
+  likho-search:
+    image: ghcr.io/likho-ai/likho-search:latest
+    replicas: 1
+    headless: true          # gRPC clients resolve the pods and balance per call
+    ports: { http: 4040, grpc: 5040 }
+    readiness: { path: /readyz, port: http }
+    liveness: { path: /healthz, port: http }
+    secret: likho-search-secrets
+    config: {}
+    env: {}
+    resources:
+      requests: { cpu: 50m, memory: 64Mi }
+      limits: { memory: 256Mi }
+
   # The dialer connector: no port of its own but health; it reaches likho-api through the gateway.
   likho-connector-ameyo:
     image: ghcr.io/likho-ai/likho-connector-ameyo:latest
