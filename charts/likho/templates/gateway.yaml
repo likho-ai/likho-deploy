@@ -26,7 +26,7 @@ data:
       client_max_body_size {{ $g.maxBodySize }};
 
       map $http_upgrade $connection_upgrade { default upgrade; '' close; }
-      # Behind an Ingress that ends TLS, the scheme the browser used; otherwise our own.
+      # Behind a Gateway that ends TLS, the scheme the browser used; otherwise our own.
       map $http_x_forwarded_proto $forwarded_proto { default $http_x_forwarded_proto; '' $scheme; }
 
       # The cluster's DNS, filled in at start from /etc/resolv.conf. Names are complete

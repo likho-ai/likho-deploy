@@ -13,11 +13,9 @@ services:
   likho-mfe-transcript: { image: ghcr.io/likho-ai/likho-mfe-transcript:latest }
 
 # Switch on once the staging domain is known; it must match PUBLIC_DOMAIN in
-# likho-infra/.env.staging.local (PUBLIC_ORIGIN and PUBLIC_URL are derived from it).
-ingress:
+# likho-infra/.env.staging.local (PUBLIC_ORIGIN and PUBLIC_URL are derived from it). The
+# Gateway (NGINX Gateway Fabric or the cloud's own) and its certificate belong to the cluster.
+route:
   enabled: false
-  className: nginx
-  host: ""                          # e.g. staging.likho.example.com
-  tls:
-    enabled: false
-    clusterIssuer: ""               # e.g. letsencrypt-staging, with cert-manager installed
+  hostnames: []                     # e.g. [staging.likho.example.com]
+  parent: { name: likho, namespace: nginx-gateway, sectionName: https }

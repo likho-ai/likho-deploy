@@ -1,0 +1,27 @@
+{{- if .Values.route.enabled }}
+# The public hostname, through the cluster's Gateway (Gateway API: NGINX Gateway Fabric, GKE's
+# Gateway, Envoy Gateway, ...). Everything goes to likho-gateway, which knows the routes and the
+# upload and streaming settings; TLS ends on the Gateway's listener.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: likho
+  labels: {{- include "likho.labels" . | nindent 4 }}
+spec:
+  parentRefs:
+    - name: {{ required "route.parent.name is required" .Values.route.parent.name }}
+      {{- with .Values.route.parent.namespace }}
+      namespace: {{ . }}
+      {{- end }}
+      {{- with .Values.route.parent.sectionName }}
+      sectionName: {{ . }}
+      {{- end }}
+  hostnames:
+    {{- range (required "route.hostnames is required" .Values.route.hostnames) }}
+    - {{ . | quote }}
+    {{- end }}
+  rules:
+    - backendRefs:
+        - name: likho-gateway
+          port: {{ .Values.gateway.service.port }}
+{{- end }}

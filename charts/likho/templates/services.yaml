@@ -23,6 +23,9 @@ metadata:
   name: {{ $name }}
   labels: {{- include "likho.labels" $ | nindent 4 }}
 spec:
+  {{- if $svc.headless }}
+  clusterIP: None
+  {{- end }}
   selector: {{- include "likho.selector" $name | nindent 4 }}
   ports:
     {{- range $portName, $port := $svc.ports }}

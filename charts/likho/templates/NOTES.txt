@@ -1,11 +1,14 @@
 Likho is installed in namespace {{ .Release.Namespace }}.
 
-{{- if .Values.ingress.enabled }}
-Address: http{{ if .Values.ingress.tls.enabled }}s{{ end }}://{{ .Values.ingress.host }}
-{{- else }}
-No Ingress. Reach the gateway with
+{{- if .Values.route.enabled }}
+Address: https://{{ index .Values.route.hostnames 0 }} (through the cluster's Gateway {{ .Values.route.parent.name }})
+{{- else if eq .Values.gateway.service.type "ClusterIP" }}
+No public route. Reach the gateway with
   kubectl -n {{ .Release.Namespace }} port-forward svc/likho-gateway 8080:{{ .Values.gateway.service.port }}
 and open http://localhost:8080.
+{{- else }}
+The gateway is a {{ .Values.gateway.service.type }} Service:
+  kubectl -n {{ .Release.Namespace }} get svc likho-gateway
 {{- end }}
 
 What is running:

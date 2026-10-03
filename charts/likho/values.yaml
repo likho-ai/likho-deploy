@@ -7,6 +7,8 @@
 #   secret:  the Secret <name>-secrets, made by scripts/secrets.py from .env.<environment>.local
 #   env:     explicit values set here or in an environment's values.yaml (what differs in a cluster)
 #
+# headless: true gives the Service no cluster IP: clients that resolve it get the pods' own
+# addresses, which is what gRPC needs to spread calls over replicas.
 # image: the full reference. Skaffold sets it for the local cluster (built from the sibling
 # checkout); staging and production pin a tag from GitHub Container Registry in their values.yaml.
 
@@ -34,6 +36,7 @@ services:
   likho-media:
     image: ghcr.io/likho-ai/likho-media:latest
     replicas: 1
+    headless: true          # gRPC clients resolve the pods and balance per call
     ports: { http: 4010, grpc: 5010 }
     readiness: { path: /readyz, port: http }
     liveness: { path: /healthz, port: http }
@@ -47,6 +50,7 @@ services:
   likho-transcription:
     image: ghcr.io/likho-ai/likho-transcription:latest
     replicas: 1
+    headless: true          # gRPC clients resolve the pods and balance per call
     ports: { http: 4020, grpc: 5020 }
     readiness: { path: /readyz, port: http, initialDelaySeconds: 20 }
     liveness: { path: /healthz, port: http, initialDelaySeconds: 60 }
@@ -65,6 +69,7 @@ services:
   likho-language:
     image: ghcr.io/likho-ai/likho-language:latest
     replicas: 1
+    headless: true          # gRPC clients resolve the pods and balance per call
     ports: { http: 4030, grpc: 5030 }
     readiness: { path: /readyz, port: http }
     liveness: { path: /healthz, port: http }
@@ -114,7 +119,7 @@ gateway:
   replicas: 1
   maxBodySize: 1g             # call recordings are uploaded through /media
   service:
-    type: ClusterIP           # NodePort or LoadBalancer where no Ingress controller fronts it
+    type: ClusterIP           # LoadBalancer or NodePort where no Gateway fronts it
     port: 80
     nodePort: null
   # /mfe/manifest.json: which remote entry each app is at. A release of one app changes one line.
@@ -125,13 +130,14 @@ gateway:
     requests: { cpu: 50m, memory: 32Mi }
     limits: { memory: 128Mi }
 
-# The public hostname, through the cluster's Ingress controller.
-ingress:
+# The public hostname, through the cluster's Gateway (Gateway API). The Gateway itself - its
+# listeners, the TLS certificate - belongs to the cluster, not to this chart; the route only
+# sends the hostname to likho-gateway. Without a Gateway, set gateway.service.type to
+# LoadBalancer (or NodePort) instead.
+route:
   enabled: false
-  className: nginx
-  host: ""
-  annotations: {}
-  tls:
-    enabled: false
-    secretName: likho-tls
-    clusterIssuer: ""        # cert-manager issuer, e.g. letsencrypt; empty = bring your own Secret
+  hostnames: []              # e.g. [likho.example.com]
+  parent:
+    name: ""                 # the Gateway's name
+    namespace: ""            # its namespace, when not this one
+    sectionName: ""          # one listener of it (e.g. https), when not all

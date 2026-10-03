@@ -1,5 +1,5 @@
 # Production: pinned images only (never a floating tag), two replicas of what the browser
-# talks to, the public hostname with TLS from cert-manager.
+# talks to, the public hostname through the cluster's Gateway (TLS ends there).
 # To release: put the tested tag (sha-<commit> or a version) on the image line, commit, and
 # `skaffold run -p production`. Rolling back is the same change the other way.
 imagePullSecrets: [ghcr-pull]
@@ -39,11 +39,7 @@ services:
 gateway:
   replicas: 2
 
-ingress:
+route:
   enabled: false                    # switch on with the production domain
-  className: nginx
-  host: ""                          # must match PUBLIC_DOMAIN in likho-infra/.env.production.local
-  tls:
-    enabled: true
-    secretName: likho-tls
-    clusterIssuer: letsencrypt
+  hostnames: []                     # must match PUBLIC_DOMAIN in likho-infra/.env.production.local
+  parent: { name: likho, namespace: nginx-gateway, sectionName: https }

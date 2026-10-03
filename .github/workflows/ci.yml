@@ -24,13 +24,16 @@ jobs:
       - name: Render every environment and check the objects against the Kubernetes schemas
         run: |
           set -eu
-          check() { kubeconform -strict -summary -ignore-missing-schemas; }
+          # The Gateway API's HTTPRoute is a CRD: its schema comes from the community catalogue.
+          check() {
+            kubeconform -strict -summary -schema-location default -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
+          }
           helm template likho-stack charts/likho-stack -n likho -f environments/local/stack.yaml | check
           helm template likho charts/likho -n likho -f environments/staging/env.yaml -f environments/local/values.yaml | check
           for env in staging production; do
             helm template likho-stack charts/likho-stack -n likho-$env -f environments/$env/stack.yaml | check
             helm template likho charts/likho -n likho-$env -f environments/$env/env.yaml -f environments/$env/values.yaml \
-              --set ingress.enabled=true --set ingress.host=likho.example.com | check
+              --set route.enabled=true --set route.hostnames[0]=likho.example.com --set route.parent.name=likho | check
           done
       - name: Scripts compile
         run: python3 -m py_compile scripts/sync-env.py scripts/secrets.py
