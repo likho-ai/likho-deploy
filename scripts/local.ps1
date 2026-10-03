@@ -20,7 +20,7 @@ function Ensure-Cluster {
     $status = & minikube status --format '{{.Host}}' 2>$null
     if ($status -ne 'Running') {
         Write-Host "Starting minikube ($Cpus cpus, $MemoryMB MB)..."
-        & minikube start --driver=docker --cpus=$Cpus --memory=$MemoryMB --addons=storage-provisioner --addons=default-storageclass
+        & minikube start --driver=docker --container-runtime=docker --cpus=$Cpus --memory=$MemoryMB --addons=storage-provisioner --addons=default-storageclass
         if ($LASTEXITCODE -ne 0) { throw 'minikube did not start' }
     }
     & kubectl config use-context minikube | Out-Null

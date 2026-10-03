@@ -10,7 +10,7 @@ memory=${LIKHO_MINIKUBE_MEMORY:-5120}
 ensure_cluster() {
   if [ "$(minikube status --format '{{.Host}}' 2>/dev/null || true)" != "Running" ]; then
     echo "Starting minikube ($cpus cpus, $memory MB)..."
-    minikube start --driver=docker --cpus="$cpus" --memory="$memory" --addons=storage-provisioner --addons=default-storageclass
+    minikube start --driver=docker --container-runtime=docker --cpus="$cpus" --memory="$memory" --addons=storage-provisioner --addons=default-storageclass
   fi
   kubectl config use-context minikube >/dev/null
 }
