@@ -1,7 +1,7 @@
 {{- if .Values.objectstore.enabled }}
 # SeaweedFS as the S3 object store: audio, playback copies, waveform peaks, models.
-# The S3 keys come from the s3.json Secret; the buckets are created by a Job after every
-# install and upgrade.
+# The S3 keys come from the s3.json Secret; a sidecar creates the buckets each time the pod
+# starts (safe to run again).
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -23,13 +23,13 @@ data:
     # Creates the buckets. Safe to run again.
     set -eu
     for i in $(seq 1 60); do
-      wget -qO- http://objectstore:9333/cluster/healthz >/dev/null 2>&1 && break
+      wget -qO- http://127.0.0.1:9333/cluster/healthz >/dev/null 2>&1 && break
       sleep 2
     done
     for bucket in {{ join " " .Values.objectstore.buckets }}; do
-      echo "s3.bucket.create -name $bucket" | weed shell -master=objectstore:9333 >/dev/null 2>&1 || true
+      echo "s3.bucket.create -name $bucket" | weed shell -master=127.0.0.1:9333 >/dev/null 2>&1 || true
     done
-    echo "s3.bucket.list" | weed shell -master=objectstore:9333
+    echo "s3.bucket.list" | weed shell -master=127.0.0.1:9333
 ---
 apiVersion: v1
 kind: Service
@@ -91,6 +91,14 @@ spec:
             initialDelaySeconds: 20
             periodSeconds: 15
           resources: {{- toYaml .Values.objectstore.resources | nindent 12 }}
+        - name: buckets
+          image: {{ .Values.objectstore.image | quote }}
+          command: [sh, -c, "sh /scripts/buckets.sh && exec sleep infinity"]
+          volumeMounts:
+            - { name: config, mountPath: /scripts, readOnly: true }
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits: { memory: 64Mi }
       volumes:
         - name: config
           configMap: { name: objectstore-config }
@@ -102,33 +110,4 @@ spec:
         accessModes: [ReadWriteOnce]
         {{- include "likho-stack.storageClass" . | nindent 8 }}
         resources: { requests: { storage: {{ .Values.objectstore.storage }} } }
----
-apiVersion: batch/v1
-kind: Job
-metadata:
-  name: objectstore-buckets
-  labels: {{- include "likho-stack.labels" . | nindent 4 }}
-  annotations:
-    helm.sh/hook: post-install,post-upgrade
-    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
-spec:
-  backoffLimit: 6
-  ttlSecondsAfterFinished: 600
-  template:
-    metadata:
-      labels: {{- include "likho-stack.selector" "objectstore-buckets" | nindent 8 }}
-    spec:
-      restartPolicy: OnFailure
-      containers:
-        - name: buckets
-          image: {{ .Values.objectstore.image | quote }}
-          command: [sh, /scripts/buckets.sh]
-          volumeMounts:
-            - { name: scripts, mountPath: /scripts, readOnly: true }
-          resources:
-            requests: { cpu: 50m, memory: 32Mi }
-            limits: { memory: 128Mi }
-      volumes:
-        - name: scripts
-          configMap: { name: objectstore-config }
 {{- end }}

@@ -2,6 +2,8 @@
 # images from the sibling checkouts and sets them; the settings are environments/staging/env.yaml
 # and the Secrets come from the .env.staging.local files. Only the address and the first admin
 # differ from staging, and the pods are sized for one machine.
+imagePullPolicy: IfNotPresent      # the images are built into the cluster, never pulled
+
 services:
   likho-api:
     env:

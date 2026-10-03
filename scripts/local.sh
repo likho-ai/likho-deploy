@@ -15,15 +15,21 @@ ensure_cluster() {
   kubectl config use-context minikube >/dev/null
 }
 
+ensure_stack() {
+  uv run python scripts/secrets.py staging --namespace likho --allow-placeholders
+  helm upgrade --install likho-stack charts/likho-stack --namespace likho -f environments/local/stack.yaml --wait --timeout 10m
+  uv run python scripts/render.py local
+}
+
 case "$command" in
   up)
     ensure_cluster
-    uv run python scripts/secrets.py staging --namespace likho --allow-placeholders
+    ensure_stack
     skaffold dev --port-forward
     ;;
   run)
     ensure_cluster
-    uv run python scripts/secrets.py staging --namespace likho --allow-placeholders
+    ensure_stack
     skaffold run
     echo "Reach it with: kubectl -n likho port-forward svc/likho-gateway 8080:80"
     ;;
@@ -31,7 +37,7 @@ case "$command" in
     minikube status
     kubectl -n likho get pods,pvc
     ;;
-  down) skaffold delete ;;
+  down) skaffold delete; helm uninstall likho-stack --namespace likho ;;
   destroy) minikube delete ;;
   *) echo "usage: $0 up|run|status|down|destroy"; exit 2 ;;
 esac

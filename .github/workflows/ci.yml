@@ -36,7 +36,7 @@ jobs:
               --set route.enabled=true --set route.hostnames[0]=likho.example.com --set route.parent.name=likho | check
           done
       - name: Scripts compile
-        run: python3 -m py_compile scripts/sync-env.py scripts/secrets.py
+        run: python3 -m py_compile scripts/sync-env.py scripts/secrets.py scripts/render.py
 
   skaffold:
     runs-on: ubuntu-latest
@@ -46,8 +46,5 @@ jobs:
         run: |
           curl -sSLo skaffold https://storage.googleapis.com/skaffold/releases/v2.25.0/skaffold-linux-amd64
           chmod +x skaffold && sudo mv skaffold /usr/local/bin/
-      - name: The configuration parses, in every profile
-        run: |
-          skaffold diagnose --yaml-only > /dev/null
-          skaffold diagnose --yaml-only -p staging > /dev/null
-          skaffold diagnose --yaml-only -p production > /dev/null
+      - name: The configuration parses
+        run: skaffold diagnose --yaml-only > /dev/null

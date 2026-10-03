@@ -1,14 +1,17 @@
-# Likho in a cluster, through Skaffold.
+# The local loop: Likho's own services in the local cluster (minikube), through Skaffold.
 #
-#   skaffold dev          the local cluster (minikube): builds every image from the sibling
-#                         checkouts, installs the backing services and the product, forwards the
-#                         gateway to http://localhost:8080, and rebuilds what you change
-#   skaffold run          the same, once
-#   skaffold run -p staging       the images CI published, into the staging cluster's context
-#   skaffold run -p production    the pinned images, into the production context
+#   skaffold dev     builds every image from the sibling checkouts, deploys the product, forwards
+#                    the gateway to http://localhost:8080, and rebuilds and redeploys what you change
+#   skaffold run     the same, once (every pod of the product restarts: Skaffold labels each run)
 #
-# Before the first run of an environment: `uv run python scripts/secrets.py <environment>`
-# (see scripts/local.ps1 for the local cluster, which does every step).
+# The backing services (charts/likho-stack) are not Skaffold's: scripts/local.ps1 installs them
+# with Helm once, so a redeploy never restarts a database or the event bus. Staging and
+# production are Helm releases of both charts: scripts/deploy.ps1 <environment>.
+#
+# The product chart is rendered with Helm (scripts/render.py, run before every deploy) and
+# applied with kubectl; Skaffold puts the images it built into the rendered objects itself.
+# (Skaffold 2.25's own Helm support installs a post-renderer plugin whose manifest Helm 4 cannot
+# read on Windows.) A chart change needs a new run.
 apiVersion: skaffold/v4beta14
 kind: Config
 metadata:
@@ -37,32 +40,18 @@ build:
     - image: ghcr.io/likho-ai/likho-mfe-transcript
       context: ../likho-mfe-transcript
 
+manifests:
+  rawYaml: [rendered/local/likho.yaml]
+  hooks:
+    before:
+      - host:
+          command: [uv, run, python, scripts/render.py, local]
+          os: [windows, linux, darwin]
+
 deploy:
-  helm:
-    releases:
-      - name: likho-stack
-        chartPath: charts/likho-stack
-        namespace: likho
-        createNamespace: true
-        valuesFiles: [environments/local/stack.yaml]
-        wait: true
-      - name: likho
-        chartPath: charts/likho
-        namespace: likho
-        createNamespace: true
-        valuesFiles:
-          - environments/staging/env.yaml
-          - environments/local/values.yaml
-        setValueTemplates:
-          services.likho-api.image: "{{.IMAGE_FULLY_QUALIFIED_ghcr_io_likho_ai_likho_api}}"
-          services.likho-media.image: "{{.IMAGE_FULLY_QUALIFIED_ghcr_io_likho_ai_likho_media}}"
-          services.likho-transcription.image: "{{.IMAGE_FULLY_QUALIFIED_ghcr_io_likho_ai_likho_transcription}}"
-          services.likho-language.image: "{{.IMAGE_FULLY_QUALIFIED_ghcr_io_likho_ai_likho_language}}"
-          services.likho-web-shell.image: "{{.IMAGE_FULLY_QUALIFIED_ghcr_io_likho_ai_likho_web_shell}}"
-          services.likho-mfe-library.image: "{{.IMAGE_FULLY_QUALIFIED_ghcr_io_likho_ai_likho_mfe_library}}"
-          services.likho-mfe-transcript.image: "{{.IMAGE_FULLY_QUALIFIED_ghcr_io_likho_ai_likho_mfe_transcript}}"
-        wait: true
-  statusCheckDeadlineSeconds: 900   # the transcription image and the model take a while the first time
+  kubectl:
+    defaultNamespace: likho
+  statusCheckDeadlineSeconds: 600
 
 portForward:
   - resourceType: service
@@ -70,57 +59,3 @@ portForward:
     namespace: likho
     port: 80
     localPort: 8080
-
-profiles:
-  # The real environments: nothing is built here; the images come from GitHub Container Registry.
-  - name: staging
-    patches:
-      - op: replace
-        path: /build
-        value: { artifacts: [] }
-      - op: remove
-        path: /portForward
-    deploy:
-      helm:
-        releases:
-          - name: likho-stack
-            chartPath: charts/likho-stack
-            namespace: likho-staging
-            createNamespace: true
-            valuesFiles: [environments/staging/stack.yaml]
-            wait: true
-          - name: likho
-            chartPath: charts/likho
-            namespace: likho-staging
-            createNamespace: true
-            valuesFiles:
-              - environments/staging/env.yaml
-              - environments/staging/values.yaml
-            wait: true
-      statusCheckDeadlineSeconds: 900
-
-  - name: production
-    patches:
-      - op: replace
-        path: /build
-        value: { artifacts: [] }
-      - op: remove
-        path: /portForward
-    deploy:
-      helm:
-        releases:
-          - name: likho-stack
-            chartPath: charts/likho-stack
-            namespace: likho-production
-            createNamespace: true
-            valuesFiles: [environments/production/stack.yaml]
-            wait: true
-          - name: likho
-            chartPath: charts/likho
-            namespace: likho-production
-            createNamespace: true
-            valuesFiles:
-              - environments/production/env.yaml
-              - environments/production/values.yaml
-            wait: true
-      statusCheckDeadlineSeconds: 900

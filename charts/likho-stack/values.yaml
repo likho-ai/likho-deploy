@@ -45,7 +45,7 @@ nats:
   resources:
     requests: { cpu: 100m, memory: 64Mi }
     limits: { memory: 256Mi }
-  # The one-shot Job that creates the JetStream streams (a Helm hook after install and upgrade).
+  # The sidecar that creates the JetStream streams whenever the pod starts.
   init:
     image: natsio/nats-box:0.20.0
 

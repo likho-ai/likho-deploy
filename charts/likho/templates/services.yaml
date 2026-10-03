@@ -86,7 +86,7 @@ spec:
       containers:
         - name: {{ $name }}
           image: {{ $svc.image | quote }}
-          imagePullPolicy: {{ include "likho.pullPolicy" $svc.image }}
+          imagePullPolicy: {{ $.Values.imagePullPolicy | default (include "likho.pullPolicy" $svc.image) }}
           securityContext: {{- toYaml (hasKey $svc "securityContext" | ternary $svc.securityContext $.Values.containerSecurityContext) | nindent 12 }}
           ports:
             {{- range $portName, $port := $svc.ports }}

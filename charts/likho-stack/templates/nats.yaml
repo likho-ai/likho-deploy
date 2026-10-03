@@ -1,6 +1,6 @@
 {{- if .Values.nats.enabled }}
-# NATS JetStream: the event bus. The streams are created by a Job after every install and upgrade
-# (the same script as likho-infra/nats/streams.sh; the subjects are documented in likho-contracts).
+# NATS JetStream: the event bus. A sidecar creates the streams each time the pod starts (the same
+# script as likho-infra/nats/streams.sh, safe to run again; the subjects are in likho-contracts).
 apiVersion: v1
 kind: Service
 metadata:
@@ -46,6 +46,17 @@ spec:
             initialDelaySeconds: 10
             periodSeconds: 15
           resources: {{- toYaml .Values.nats.resources | nindent 12 }}
+        - name: streams
+          image: {{ .Values.nats.init.image | quote }}
+          command: [sh, -c, "sh /scripts/streams.sh && exec sleep infinity"]
+          volumeMounts:
+            - { name: scripts, mountPath: /scripts, readOnly: true }
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits: { memory: 64Mi }
+      volumes:
+        - name: scripts
+          configMap: { name: nats-streams }
   volumeClaimTemplates:
     - metadata: { name: data }
       spec:
@@ -63,7 +74,7 @@ data:
     #!/bin/sh
     # Creates the JetStream streams. Safe to run again: existing streams are updated in place.
     set -eu
-    NATS="nats --server nats://nats:4222"
+    NATS="nats --server nats://127.0.0.1:4222"
     for i in $(seq 1 60); do
       $NATS server check connection >/dev/null 2>&1 && break
       sleep 2
@@ -88,33 +99,4 @@ data:
     # Corrections made by people: training data, never expired.
     ensure LIKHO_KEEP --subjects "likho.transcript.*"
     $NATS stream ls
----
-apiVersion: batch/v1
-kind: Job
-metadata:
-  name: nats-streams
-  labels: {{- include "likho-stack.labels" . | nindent 4 }}
-  annotations:
-    helm.sh/hook: post-install,post-upgrade
-    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
-spec:
-  backoffLimit: 6
-  ttlSecondsAfterFinished: 600
-  template:
-    metadata:
-      labels: {{- include "likho-stack.selector" "nats-streams" | nindent 8 }}
-    spec:
-      restartPolicy: OnFailure
-      containers:
-        - name: streams
-          image: {{ .Values.nats.init.image | quote }}
-          command: [sh, /scripts/streams.sh]
-          volumeMounts:
-            - { name: scripts, mountPath: /scripts, readOnly: true }
-          resources:
-            requests: { cpu: 50m, memory: 32Mi }
-            limits: { memory: 64Mi }
-      volumes:
-        - name: scripts
-          configMap: { name: nats-streams }
 {{- end }}

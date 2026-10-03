@@ -13,6 +13,7 @@
 # checkout); staging and production pin a tag from GitHub Container Registry in their values.yaml.
 
 imagePullSecrets: []        # [ghcr-pull] where the images are pulled from a private registry
+imagePullPolicy: ""        # empty = Always for a floating tag, IfNotPresent for a pinned one
 clusterDomain: cluster.local
 
 # Applied to every service container; a service may replace it with its own `securityContext`.

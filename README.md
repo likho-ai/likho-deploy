@@ -1,8 +1,7 @@
 # likho-deploy
 
-Likho in Kubernetes: the Helm charts, the settings of each environment, and Skaffold to build
-and roll it out. One repository for every environment, so what runs in production is what ran
-on your machine.
+Likho in Kubernetes: the Helm charts, the settings of each environment, and the scripts that
+roll it out - the same charts for your machine, staging and production.
 
 ```
 likho-deploy
@@ -14,9 +13,11 @@ likho-deploy
 │   └── production/         the same, pinned images, two replicas
 ├── scripts/
 │   ├── local.ps1, local.sh    the local cluster, start to finish
+│   ├── deploy.ps1, deploy.sh  staging or production: both charts as Helm releases
 │   ├── sync-env.py            each repository's .env.<environment> -> environments/<environment>/env.yaml
-│   └── secrets.py             the .env.<environment>.local files -> Kubernetes Secrets (never written to disk)
-└── skaffold.yaml           build, deploy, port-forward; profiles staging and production
+│   ├── secrets.py             the .env.<environment>.local files -> Kubernetes Secrets (never written to disk)
+│   └── render.py              the product chart -> rendered/local/likho.yaml, for Skaffold
+└── skaffold.yaml           the local loop: build the seven images, deploy the product, forward :8080
 ```
 
 ## How settings reach a pod
@@ -32,10 +33,13 @@ The `.env` files in each service's repository stay the source of truth
 
 A later source wins. The Secret of the backing services (database passwords, S3 keys) comes from
 `likho-infra/.env.<environment>.local`; the stack chart creates the database users, the streams
-and the buckets from it on the first start.
+and the buckets from it when its pods start.
 
 The in-cluster addresses the `.env.<environment>` files use (`postgres:5432`, `nats:4222`,
-`likho-media:5010`, ...) are the names of the Services here, so nothing is rewritten.
+`likho-media:5010`, ...) are the names of the Services here, so nothing is rewritten. One
+setting exists only for a cluster: likho-media's `INTERNAL_URL` (`http://likho-media:4010`),
+the address the transcription worker downloads originals from, since the public address is
+not reachable from inside.
 
 ## The local cluster
 
@@ -43,13 +47,22 @@ Needs Docker Desktop, [minikube](https://minikube.sigs.k8s.io/), kubectl, Helm 4
 uv, and the other repositories cloned next to this one (`D:\likho\likho-api`, ...).
 
 ```powershell
-.\scripts\local.ps1 up      # start minikube, make the Secrets, build the seven images, deploy, forward :8080, watch
+.\scripts\local.ps1 up      # minikube, the Secrets, the backing services (Helm), the product (Skaffold), :8080
 ```
 
-The first run builds every image inside minikube and the transcription service downloads its
-model (1.6 GB) on the first job; later runs rebuild only what changed. Open http://localhost:8080
-and sign in with `admin@example.com` / `admin-password-1`. `.\scripts\local.ps1 status`, `down`,
-`destroy` do what they say. To copy the model you already have instead of downloading it:
+The first run builds the seven images inside minikube and the transcription service downloads
+its model (1.6 GB) on the first job; later runs rebuild only what changed. Open
+http://localhost:8080 and sign in with `admin@example.com` / `admin-password-1`.
+`.\scripts\local.ps1 status`, `down`, `destroy` do what they say.
+
+Two things to know. The backing services are a Helm release that Skaffold never touches, so a
+redeploy never restarts a database or the event bus; `skaffold run` restarts every pod of the
+product (Skaffold labels each run), `skaffold dev` only what changed. And the local cluster runs
+the **staging** configuration (`environments/staging/env.yaml`, the `.env.staging.local`
+secrets) with `http://localhost:8080` as its address and the development admin login - what is
+rehearsed here is what staging gets.
+
+To copy the model you already have instead of downloading it:
 
 ```powershell
 kubectl -n likho cp "$env:USERPROFILE\.cache\huggingface\hub\models--mobiuslabsgmbh--faster-whisper-large-v3-turbo" `
@@ -64,14 +77,14 @@ kubectl -n likho cp "$env:USERPROFILE\.cache\huggingface\hub\models--mobiuslabsg
 3. `environments/staging/values.yaml`: the image tags to run and the public hostname (`route`:
    an `HTTPRoute` to the cluster's Gateway - NGINX Gateway Fabric, or the cloud's own; TLS ends
    there. Without a Gateway, make `gateway.service.type` a LoadBalancer).
-4. With the cluster's context current: `GHCR_USER`/`GHCR_TOKEN` set (a token with `read:packages`,
-   because the images are private), `uv run python scripts/secrets.py staging`, then
-   `skaffold run -p staging`.
+4. With the cluster's context current and `GHCR_USER`/`GHCR_TOKEN` set (a token with
+   `read:packages`, because the images are private): `uv run python scripts/secrets.py staging`,
+   then `.\scripts\deploy.ps1 staging`.
 
-A release is a change of the image tag in `values.yaml`, committed, and `skaffold run` again; a
-rollback is the same change the other way (or `helm -n likho-staging rollback likho`). Production
-is the same with `production`; its values pin image tags and run two replicas of what the browser
-talks to.
+A release is a change of the image tag in `values.yaml`, committed, and `deploy.ps1` again; a
+rollback is `helm -n likho-staging rollback likho` (or the same change the other way).
+Production is the same with `production`; its values pin image tags and run two replicas of what
+the browser talks to.
 
 Managed databases or object storage: disable the part in `environments/<environment>/stack.yaml`
 and point the service's `.env.<environment>.local` at the managed address.
@@ -85,4 +98,5 @@ skaffold diagnose
 ```
 
 CI lints both charts, renders every environment and checks the objects against the Kubernetes
-schemas (kubeconform).
+schemas (kubeconform). The proof is the local cluster: with it running, likho-web-shell's
+browser test passes against it (`LIKHO_WEB_URL=http://localhost:8080 pnpm e2e`).
