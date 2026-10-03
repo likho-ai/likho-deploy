@@ -92,7 +92,7 @@ data:
     }
     # Business events, kept 30 days.
     ensure LIKHO \
-      --subjects "likho.media.*,likho.transcription.*,likho.vocabulary.*,likho.insights.*,likho.dead" \
+      --subjects "likho.media.*,likho.transcription.*,likho.vocabulary.*,likho.insights.*,likho.import.*,likho.recording.*,likho.dead" \
       --max-age 30d
     # Live transcript lines: many small messages, only useful while a job runs.
     ensure LIKHO_LIVE --subjects "likho.live.*" --max-age 1d
