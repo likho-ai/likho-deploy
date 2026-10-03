@@ -15,12 +15,15 @@ data:
     CREATE ROLE likho_api      LOGIN PASSWORD '$LIKHO_API_DB_PASSWORD';
     CREATE ROLE likho_media    LOGIN PASSWORD '$LIKHO_MEDIA_DB_PASSWORD';
     CREATE ROLE likho_language LOGIN PASSWORD '$LIKHO_LANGUAGE_DB_PASSWORD';
+    CREATE ROLE likho_connector LOGIN PASSWORD '$LIKHO_CONNECTOR_DB_PASSWORD';
     CREATE DATABASE likho_api      OWNER likho_api;
     CREATE DATABASE likho_media    OWNER likho_media;
     CREATE DATABASE likho_language OWNER likho_language;
+    CREATE DATABASE likho_connector OWNER likho_connector;
     REVOKE CONNECT ON DATABASE likho_api      FROM PUBLIC;
     REVOKE CONNECT ON DATABASE likho_media    FROM PUBLIC;
     REVOKE CONNECT ON DATABASE likho_language FROM PUBLIC;
+    REVOKE CONNECT ON DATABASE likho_connector FROM PUBLIC;
     SQL
 ---
 apiVersion: v1
@@ -64,6 +67,8 @@ spec:
               valueFrom: { secretKeyRef: { name: {{ .Values.secrets.name }}, key: LIKHO_MEDIA_DB_PASSWORD } }
             - name: LIKHO_LANGUAGE_DB_PASSWORD
               valueFrom: { secretKeyRef: { name: {{ .Values.secrets.name }}, key: LIKHO_LANGUAGE_DB_PASSWORD } }
+            - name: LIKHO_CONNECTOR_DB_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ .Values.secrets.name }}, key: LIKHO_CONNECTOR_DB_PASSWORD } }
           volumeMounts:
             - { name: data, mountPath: /var/lib/postgresql/data }
             - { name: init, mountPath: /docker-entrypoint-initdb.d, readOnly: true }

@@ -27,3 +27,6 @@ services:
     resources:
       requests: { cpu: 50m, memory: 64Mi }
       limits: { memory: 512Mi }
+  likho-connector-ameyo:
+    env:
+      LIKHO_API_URL: http://likho-gateway

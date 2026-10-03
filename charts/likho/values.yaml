@@ -81,6 +81,20 @@ services:
       requests: { cpu: 100m, memory: 128Mi }
       limits: { memory: 512Mi }
 
+  # The dialer connector: no port of its own but health; it reaches likho-api through the gateway.
+  likho-connector-ameyo:
+    image: ghcr.io/likho-ai/likho-connector-ameyo:latest
+    replicas: 1                     # one: the schedule and the durable consumers are per group
+    ports: { http: 4060 }
+    readiness: { path: /readyz, port: http }
+    liveness: { path: /healthz, port: http }
+    secret: likho-connector-ameyo-secrets
+    config: {}
+    env: {}
+    resources:
+      requests: { cpu: 50m, memory: 96Mi }
+      limits: { memory: 384Mi }
+
   # The web app: static files behind nginx, no settings (the browser talks to the gateway's origin).
   likho-web-shell:
     image: ghcr.io/likho-ai/likho-web-shell:latest

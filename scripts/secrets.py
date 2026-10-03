@@ -13,6 +13,7 @@ make-env-secrets.py wrote:
     likho-media/.env.<env>.local      -> Secret likho-media-secrets
     likho-transcription/.env.<env>.local -> Secret likho-transcription-secrets
     likho-language/.env.<env>.local   -> Secret likho-language-secrets
+    likho-connector-ameyo/.env.<env>.local -> Secret likho-connector-ameyo-secrets
 
 With GHCR_USER and GHCR_TOKEN in the environment (a GitHub token with read:packages), also
 the pull secret ghcr-pull for the private images. Nothing is written to disk and no value is
@@ -30,7 +31,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-SERVICES = ("likho-api", "likho-media", "likho-transcription", "likho-language")
+SERVICES = ("likho-api", "likho-media", "likho-transcription", "likho-language", "likho-connector-ameyo")
 ENVIRONMENTS = ("staging", "production")
 
 
