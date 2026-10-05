@@ -16,6 +16,7 @@ make-env-secrets.py wrote:
     likho-search/.env.<env>.local     -> Secret likho-search-secrets
     likho-connector-ameyo/.env.<env>.local -> Secret likho-connector-ameyo-secrets
     likho-insights/.env.<env>.local   -> Secret likho-insights-secrets
+    likho-analytics/.env.<env>.local  -> Secret likho-analytics-secrets
 
 With GHCR_USER and GHCR_TOKEN in the environment (a GitHub token with read:packages), also
 the pull secret ghcr-pull for the private images. Nothing is written to disk and no value is
@@ -41,6 +42,7 @@ SERVICES = (
     "likho-search",
     "likho-connector-ameyo",
     "likho-insights",
+    "likho-analytics",
 )
 ENVIRONMENTS = ("staging", "production")
 

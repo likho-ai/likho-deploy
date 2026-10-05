@@ -23,6 +23,7 @@ SERVICES = (
     "likho-search",
     "likho-connector-ameyo",
     "likho-insights",
+    "likho-analytics",
 )
 ENVIRONMENTS = ("staging", "production")
 

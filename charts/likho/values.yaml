@@ -111,6 +111,21 @@ services:
       requests: { cpu: 50m, memory: 96Mi }
       limits: { memory: 384Mi }
 
+  # Analytics: every event into ClickHouse, and the numbers behind the calls.
+  likho-analytics:
+    image: ghcr.io/likho-ai/likho-analytics:latest
+    replicas: 1
+    headless: true          # gRPC clients resolve the pods and balance per call
+    ports: { http: 4070, grpc: 5070 }
+    readiness: { path: /readyz, port: http }
+    liveness: { path: /healthz, port: http }
+    secret: likho-analytics-secrets
+    config: {}
+    env: {}
+    resources:
+      requests: { cpu: 50m, memory: 64Mi }
+      limits: { memory: 256Mi }
+
   # The dialer connector: no port of its own but health; it reaches likho-api through the gateway.
   likho-connector-ameyo:
     image: ghcr.io/likho-ai/likho-connector-ameyo:latest

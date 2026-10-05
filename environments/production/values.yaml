@@ -43,6 +43,8 @@ services:
     replicas: 2
   likho-insights:
     image: ghcr.io/likho-ai/likho-insights:latest   # CHANGE to a pinned tag before the first release
+  likho-analytics:
+    image: ghcr.io/likho-ai/likho-analytics:latest  # CHANGE to a pinned tag before the first release
   likho-mfe-insights:
     image: ghcr.io/likho-ai/likho-mfe-insights:latest
     replicas: 2

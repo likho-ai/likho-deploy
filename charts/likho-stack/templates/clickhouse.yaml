@@ -1,0 +1,91 @@
+{{- if .Values.clickhouse.enabled }}
+# ClickHouse: every event of the platform and the numbers likho-analytics answers from them.
+# The login likho-analytics uses is made on the first start from the Secret (the image reads
+# CLICKHOUSE_USER / CLICKHOUSE_PASSWORD / CLICKHOUSE_DB).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: clickhouse-config
+  labels: {{- include "likho-stack.labels" . | nindent 4 }}
+data:
+  likho.xml: |
+    <clickhouse>
+      <max_server_memory_usage>{{ .Values.clickhouse.maxServerMemoryBytes }}</max_server_memory_usage>
+      <max_server_memory_usage_to_ram_ratio>0</max_server_memory_usage_to_ram_ratio>
+      <mark_cache_size>134217728</mark_cache_size>
+      <uncompressed_cache_size>67108864</uncompressed_cache_size>
+      <background_pool_size>4</background_pool_size>
+      <logger><level>warning</level></logger>
+      <query_log remove="1" />
+      <query_thread_log remove="1" />
+      <metric_log remove="1" />
+      <asynchronous_metric_log remove="1" />
+      <trace_log remove="1" />
+      <part_log remove="1" />
+      <text_log remove="1" />
+      <session_log remove="1" />
+      <processors_profile_log remove="1" />
+    </clickhouse>
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: clickhouse
+  labels: {{- include "likho-stack.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  selector: {{- include "likho-stack.selector" "clickhouse" | nindent 4 }}
+  ports:
+    - name: http
+      port: 8123
+    - name: native
+      port: 9000
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: clickhouse
+  labels: {{- include "likho-stack.labels" . | nindent 4 }}
+spec:
+  serviceName: clickhouse
+  replicas: 1
+  selector:
+    matchLabels: {{- include "likho-stack.selector" "clickhouse" | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "likho-stack.selector" "clickhouse" | nindent 8 }}
+    spec:
+      containers:
+        - name: clickhouse
+          image: {{ .Values.clickhouse.image | quote }}
+          ports:
+            - { name: http, containerPort: 8123 }
+            - { name: native, containerPort: 9000 }
+          env:
+            - name: CLICKHOUSE_USER
+              value: likho_analytics
+            - name: CLICKHOUSE_DB
+              value: likho_analytics
+            - name: CLICKHOUSE_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ .Values.secrets.name }}, key: CLICKHOUSE_PASSWORD } }
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/clickhouse }
+            - { name: config, mountPath: /etc/clickhouse-server/config.d/likho.xml, subPath: likho.xml }
+          readinessProbe:
+            httpGet: { path: /ping, port: http }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /ping, port: http }
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          resources: {{- toYaml .Values.clickhouse.resources | nindent 12 }}
+      volumes:
+        - name: config
+          configMap: { name: clickhouse-config }
+  volumeClaimTemplates:
+    - metadata: { name: data }
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- include "likho-stack.storageClass" . | nindent 8 }}
+        resources: { requests: { storage: {{ .Values.clickhouse.storage }} } }
+{{- end }}

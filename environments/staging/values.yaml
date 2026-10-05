@@ -15,6 +15,7 @@ services:
   likho-mfe-vocabulary: { image: ghcr.io/likho-ai/likho-mfe-vocabulary:latest }
   likho-search: { image: ghcr.io/likho-ai/likho-search:latest }
   likho-insights: { image: ghcr.io/likho-ai/likho-insights:latest }
+  likho-analytics: { image: ghcr.io/likho-ai/likho-analytics:latest }
   likho-mfe-insights: { image: ghcr.io/likho-ai/likho-mfe-insights:latest }
 
 # Switch on once the staging domain is known; it must match PUBLIC_DOMAIN in
