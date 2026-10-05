@@ -95,6 +95,22 @@ services:
       requests: { cpu: 50m, memory: 64Mi }
       limits: { memory: 256Mi }
 
+  # Insights: asks a language model about every transcript. Analyses nothing until its Secret
+  # carries ANTHROPIC_API_KEY (the company's yes to sending transcript text to the model).
+  likho-insights:
+    image: ghcr.io/likho-ai/likho-insights:latest
+    replicas: 1
+    headless: true          # gRPC clients resolve the pods and balance per call
+    ports: { http: 4050, grpc: 5050 }
+    readiness: { path: /readyz, port: http }
+    liveness: { path: /healthz, port: http }
+    secret: likho-insights-secrets
+    config: {}
+    env: {}
+    resources:
+      requests: { cpu: 50m, memory: 96Mi }
+      limits: { memory: 384Mi }
+
   # The dialer connector: no port of its own but health; it reaches likho-api through the gateway.
   likho-connector-ameyo:
     image: ghcr.io/likho-ai/likho-connector-ameyo:latest
@@ -165,6 +181,17 @@ services:
     resources:
       requests: { cpu: 10m, memory: 16Mi }
       limits: { memory: 64Mi }
+  likho-mfe-insights:
+    image: ghcr.io/likho-ai/likho-mfe-insights:latest
+    replicas: 1
+    metrics: false                # static files: nothing to scrape
+    ports: { http: 80 }
+    readiness: { path: /healthz, port: http }
+    liveness: { path: /healthz, port: http }
+    securityContext: {}
+    resources:
+      requests: { cpu: 10m, memory: 16Mi }
+      limits: { memory: 64Mi }
 
 # The gateway: one address for the web app and every API (nginx, the same routes as
 # likho-infra/nginx/nginx.conf, with the cluster's services as upstreams).
@@ -182,6 +209,7 @@ gateway:
     transcript: /mfe/transcript/remoteEntry.js
     admin: /mfe/admin/remoteEntry.js
     vocabulary: /mfe/vocabulary/remoteEntry.js
+    insights: /mfe/insights/remoteEntry.js
   resources:
     requests: { cpu: 50m, memory: 32Mi }
     limits: { memory: 128Mi }

@@ -1,6 +1,6 @@
 {{- if .Values.mongo.enabled }}
-# MongoDB with authentication: a root user and the login likho-transcription uses, both created on
-# the first start from the Secret.
+# MongoDB with authentication: a root user and the logins likho-transcription and likho-insights
+# use, all created on the first start from the Secret.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -8,11 +8,16 @@ metadata:
   labels: {{- include "likho-stack.labels" . | nindent 4 }}
 data:
   10-users.js: |
-    // The login the transcription service uses (its MONGO_URL says authSource=admin).
+    // The logins the transcription and insights services use (their MONGO_URL says authSource=admin).
     db.getSiblingDB('admin').createUser({
       user: 'likho_transcription',
       pwd: process.env.MONGO_PASSWORD,
       roles: [{ role: 'readWrite', db: 'likho_transcription' }],
+    });
+    db.getSiblingDB('admin').createUser({
+      user: 'likho_insights',
+      pwd: process.env.MONGO_PASSWORD,
+      roles: [{ role: 'readWrite', db: 'likho_insights' }],
     });
 ---
 apiVersion: v1
