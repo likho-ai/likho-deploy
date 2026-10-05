@@ -39,6 +39,8 @@ build:
       context: ../likho-mfe-library
     - image: ghcr.io/likho-ai/likho-mfe-transcript
       context: ../likho-mfe-transcript
+    - image: ghcr.io/likho-ai/likho-mfe-admin
+      context: ../likho-mfe-admin
 
 manifests:
   rawYaml: [rendered/local/likho.yaml]

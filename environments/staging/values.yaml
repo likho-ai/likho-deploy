@@ -11,6 +11,7 @@ services:
   likho-web-shell: { image: ghcr.io/likho-ai/likho-web-shell:latest }
   likho-mfe-library: { image: ghcr.io/likho-ai/likho-mfe-library:latest }
   likho-mfe-transcript: { image: ghcr.io/likho-ai/likho-mfe-transcript:latest }
+  likho-mfe-admin: { image: ghcr.io/likho-ai/likho-mfe-admin:latest }
 
 # Switch on once the staging domain is known; it must match PUBLIC_DOMAIN in
 # likho-infra/.env.staging.local (PUBLIC_ORIGIN and PUBLIC_URL are derived from it). The

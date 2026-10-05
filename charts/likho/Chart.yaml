@@ -1,6 +1,6 @@
 apiVersion: v2
 name: likho
-description: The Likho product in a cluster - the four services (likho-api, likho-media, likho-transcription, likho-language), the web app (likho-web-shell, likho-mfe-library, likho-mfe-transcript) and the gateway that gives them one address. Settings come from each repository's .env.<environment> (synced into environments/<environment>/env.yaml) and secrets from Secrets made by scripts/secrets.py.
+description: The Likho product in a cluster - the four services (likho-api, likho-media, likho-transcription, likho-language), the web app (likho-web-shell, likho-mfe-library, likho-mfe-transcript, likho-mfe-admin) and the gateway that gives them one address. Settings come from each repository's .env.<environment> (synced into environments/<environment>/env.yaml) and secrets from Secrets made by scripts/secrets.py.
 type: application
 version: 0.1.0
 appVersion: "0.1.0"

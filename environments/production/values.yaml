@@ -35,6 +35,9 @@ services:
   likho-mfe-transcript:
     image: ghcr.io/likho-ai/likho-mfe-transcript:latest
     replicas: 2
+  likho-mfe-admin:
+    image: ghcr.io/likho-ai/likho-mfe-admin:latest
+    replicas: 2
 
 gateway:
   replicas: 2
