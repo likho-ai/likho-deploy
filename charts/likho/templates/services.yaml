@@ -66,6 +66,13 @@ spec:
       annotations:
         # A changed setting restarts the pods, so a ConfigMap edit is never silently ignored.
         checksum/config: {{ ($svc.config | default dict) | toJson | sha256sum }}
+        {{- if ne ($svc.metrics | default true) false }}
+        # Every service serves Prometheus text at /metrics on its HTTP port; the cluster's
+        # Prometheus may scrape it (or set OTEL_EXPORTER_OTLP_ENDPOINT to push).
+        prometheus.io/scrape: "true"
+        prometheus.io/path: /metrics
+        prometheus.io/port: {{ $svc.ports.http | quote }}
+        {{- end }}
     spec:
       {{- with $svc.terminationGracePeriodSeconds }}
       terminationGracePeriodSeconds: {{ . }}

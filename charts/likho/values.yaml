@@ -113,6 +113,7 @@ services:
   likho-web-shell:
     image: ghcr.io/likho-ai/likho-web-shell:latest
     replicas: 1
+    metrics: false                # static files: nothing to scrape
     ports: { http: 80 }
     readiness: { path: /healthz, port: http }
     liveness: { path: /healthz, port: http }
@@ -123,6 +124,7 @@ services:
   likho-mfe-library:
     image: ghcr.io/likho-ai/likho-mfe-library:latest
     replicas: 1
+    metrics: false                # static files: nothing to scrape
     ports: { http: 80 }
     readiness: { path: /healthz, port: http }
     liveness: { path: /healthz, port: http }
@@ -133,6 +135,7 @@ services:
   likho-mfe-transcript:
     image: ghcr.io/likho-ai/likho-mfe-transcript:latest
     replicas: 1
+    metrics: false                # static files: nothing to scrape
     ports: { http: 80 }
     readiness: { path: /healthz, port: http }
     liveness: { path: /healthz, port: http }
@@ -143,6 +146,7 @@ services:
   likho-mfe-admin:
     image: ghcr.io/likho-ai/likho-mfe-admin:latest
     replicas: 1
+    metrics: false                # static files: nothing to scrape
     ports: { http: 80 }
     readiness: { path: /healthz, port: http }
     liveness: { path: /healthz, port: http }
