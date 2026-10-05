@@ -14,7 +14,6 @@ data:
       <max_server_memory_usage_to_ram_ratio>0</max_server_memory_usage_to_ram_ratio>
       <mark_cache_size>134217728</mark_cache_size>
       <uncompressed_cache_size>67108864</uncompressed_cache_size>
-      <background_pool_size>4</background_pool_size>
       <logger><level>warning</level></logger>
       <query_log remove="1" />
       <query_thread_log remove="1" />
