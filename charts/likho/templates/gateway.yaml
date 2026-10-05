@@ -5,6 +5,7 @@
 {{- $library := include "likho.upstream" (dict "ctx" $ "name" "likho-mfe-library" "port" (index .Values.services "likho-mfe-library").ports.http) }}
 {{- $transcript := include "likho.upstream" (dict "ctx" $ "name" "likho-mfe-transcript" "port" (index .Values.services "likho-mfe-transcript").ports.http) }}
 {{- $admin := include "likho.upstream" (dict "ctx" $ "name" "likho-mfe-admin" "port" (index .Values.services "likho-mfe-admin").ports.http) }}
+{{- $vocabulary := include "likho.upstream" (dict "ctx" $ "name" "likho-mfe-vocabulary" "port" (index .Values.services "likho-mfe-vocabulary").ports.http) }}
 # The gateway: one address for the web app and every API. The same routes as the local stack's
 # nginx (likho-infra/nginx/nginx.conf); the upstreams are the cluster's Services, looked up at
 # request time so the gateway serves even while a service is down or being replaced.
@@ -96,6 +97,10 @@ data:
         location /mfe/admin/ {
           set $admin http://{{ $admin }};
           proxy_pass $admin;
+        }
+        location /mfe/vocabulary/ {
+          set $vocabulary http://{{ $vocabulary }};
+          proxy_pass $vocabulary;
         }
 
         # The web shell

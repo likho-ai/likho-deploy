@@ -41,6 +41,8 @@ build:
       context: ../likho-mfe-transcript
     - image: ghcr.io/likho-ai/likho-mfe-admin
       context: ../likho-mfe-admin
+    - image: ghcr.io/likho-ai/likho-mfe-vocabulary
+      context: ../likho-mfe-vocabulary
 
 manifests:
   rawYaml: [rendered/local/likho.yaml]

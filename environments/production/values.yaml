@@ -38,6 +38,9 @@ services:
   likho-mfe-admin:
     image: ghcr.io/likho-ai/likho-mfe-admin:latest
     replicas: 2
+  likho-mfe-vocabulary:
+    image: ghcr.io/likho-ai/likho-mfe-vocabulary:latest
+    replicas: 2
 
 gateway:
   replicas: 2
