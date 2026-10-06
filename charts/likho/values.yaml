@@ -130,7 +130,7 @@ services:
   likho-connector-ameyo:
     image: ghcr.io/likho-ai/likho-connector-ameyo:latest
     replicas: 1                     # one: the schedule and the durable consumers are per group
-    ports: { http: 4060 }
+    ports: { http: 4060, grpc: 5060 }
     readiness: { path: /readyz, port: http }
     liveness: { path: /healthz, port: http }
     secret: likho-connector-ameyo-secrets
