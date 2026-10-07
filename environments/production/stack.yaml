@@ -20,3 +20,13 @@ objectstore:
 meilisearch:
   storage: 20Gi
   resources: { requests: { cpu: 500m, memory: 512Mi }, limits: { memory: 2Gi } }
+
+# Scale and operations: the databases only reachable from Likho's pods, nightly dumps with a
+# monthly restore drill, and nightly volume snapshots (the audio). Point backup.s3 at a bucket
+# outside this cluster (and its keys in a Secret) before the first release.
+networkPolicy: { enabled: true }
+backup:
+  timeZone: Asia/Kolkata
+  keepDays: 30
+  scratchSize: 100Gi
+snapshots: { enabled: true }

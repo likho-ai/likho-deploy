@@ -10,7 +10,7 @@ metadata:
 data:
   likho.xml: |
     <clickhouse>
-      <max_server_memory_usage>{{ .Values.clickhouse.maxServerMemoryBytes }}</max_server_memory_usage>
+      <max_server_memory_usage>{{ .Values.clickhouse.maxServerMemoryBytes | int64 }}</max_server_memory_usage>
       <max_server_memory_usage_to_ram_ratio>0</max_server_memory_usage_to_ram_ratio>
       <mark_cache_size>134217728</mark_cache_size>
       <uncompressed_cache_size>67108864</uncompressed_cache_size>
@@ -73,10 +73,16 @@ spec:
           readinessProbe:
             httpGet: { path: /ping, port: http }
             periodSeconds: 5
+          # Up to 10 minutes to start (loading parts after an unclean stop); see postgres.yaml.
+          startupProbe:
+            httpGet: { path: /ping, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 60
           livenessProbe:
             httpGet: { path: /ping, port: http }
-            initialDelaySeconds: 30
             periodSeconds: 15
+            timeoutSeconds: 5
           resources: {{- toYaml .Values.clickhouse.resources | nindent 12 }}
       volumes:
         - name: config

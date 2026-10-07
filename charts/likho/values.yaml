@@ -20,6 +20,44 @@ clusterDomain: cluster.local
 containerSecurityContext:
   allowPrivilegeEscalation: false
 
+# --- scale and operations (templates/scaling.yaml, networkpolicy.yaml, alerts.yaml) ----------
+#
+# Per service, beside the fields above:
+#   autoscaling: { enabled, minReplicas, maxReplicas, cpu }   a HorizontalPodAutoscaler on CPU
+#   keda:        { enabled, minReplicas, maxReplicas, stream, consumer, lagThreshold }
+#                scale on a JetStream consumer's backlog (needs keda.enabled below)
+#   kind:        StatefulSet gives every pod volumes of its own (the worker's model cache)
+#   nodeSelector, tolerations, affinity: where the pods may run (a GPU node pool)
+#   ingressFrom: the services allowed to connect to this one (networkPolicy.enabled)
+
+# Spread the pods of a workload with two or more replicas over nodes and zones (soft).
+spreadPods: true
+# A PodDisruptionBudget (maxUnavailable 1) for every workload with two or more pods.
+podDisruptionBudgets: true
+
+# KEDA (https://keda.sh) installed in the cluster: the transcription worker follows the job queue.
+keda:
+  enabled: false
+  natsMonitoringEndpoint: ""    # empty = nats.<namespace>.svc.<clusterDomain>:8222 (likho-stack)
+  natsAccount: "$G"             # NATS without accounts configured
+
+networkPolicy:
+  enabled: false
+  # Who may scrape /metrics on every service's http port: the cluster's Prometheus.
+  metricsFrom:
+    - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: monitoring } }
+  # Who may reach the gateway; empty = anyone (the cluster's Gateway or load balancer).
+  gatewayFrom: []
+
+# Alerting rules for the Prometheus Operator (a PrometheusRule): the queue, failures, disks,
+# backups. Needs the operator's CRDs; `labels` is what its ruleSelector picks up.
+alerts:
+  enabled: false
+  labels: {}                     # e.g. { release: kube-prometheus-stack }
+  queueOldestMinutes: 15         # a job waiting longer than this
+  failedJobsPerHour: 5           # more failed transcriptions than this in an hour
+  diskFreePercent: 15            # a volume with less free space than this
+
 services:
   likho-api:
     image: ghcr.io/likho-ai/likho-api:latest
@@ -30,6 +68,8 @@ services:
     secret: likho-api-secrets
     config: {}
     env: {}
+    autoscaling: { enabled: false, minReplicas: 2, maxReplicas: 6, cpu: 70 }
+    ingressFrom: [likho-gateway]          # the browser and the dialer connector come through it
     resources:
       requests: { cpu: 100m, memory: 192Mi }
       limits: { memory: 512Mi }
@@ -44,6 +84,8 @@ services:
     secret: likho-media-secrets
     config: {}
     env: {}
+    # gateway: uploads and playback; likho-transcription: gRPC and the originals (INTERNAL_URL)
+    ingressFrom: [likho-gateway, likho-api, likho-transcription]
     resources:
       requests: { cpu: 100m, memory: 128Mi }
       limits: { memory: 768Mi }      # ffmpeg and peaks of one call at a time per worker
@@ -58,8 +100,20 @@ services:
     secret: likho-transcription-secrets
     config: {}
     env: {}
+    ingressFrom: [likho-api, likho-search, likho-insights]
     # A stopping pod finishes the job in hand first; a long call takes minutes.
     terminationGracePeriodSeconds: 900
+    # A StatefulSet, so every worker keeps a model cache of its own across restarts and scaling.
+    kind: StatefulSet
+    # With KEDA: one more worker per job waiting, up to maxReplicas (each holds a model in memory,
+    # or a GPU). The queue is the durable pull consumer every worker shares.
+    keda:
+      enabled: false
+      minReplicas: 1
+      maxReplicas: 4
+      stream: LIKHO
+      consumer: likho-transcription-requested
+      lagThreshold: 1
     # The model cache (HF_HOME=/models): the turbo model is 1.6 GB, downloaded on the first job.
     volumes:
       - { name: models, mountPath: /models, size: 10Gi }
@@ -77,6 +131,7 @@ services:
     secret: likho-language-secrets
     config: {}
     env: {}
+    ingressFrom: [likho-api, likho-transcription]
     resources:
       requests: { cpu: 100m, memory: 128Mi }
       limits: { memory: 512Mi }
@@ -91,6 +146,7 @@ services:
     secret: likho-search-secrets
     config: {}
     env: {}
+    ingressFrom: [likho-api]
     resources:
       requests: { cpu: 50m, memory: 64Mi }
       limits: { memory: 256Mi }
@@ -107,6 +163,7 @@ services:
     secret: likho-insights-secrets
     config: {}
     env: {}
+    ingressFrom: [likho-api]
     resources:
       requests: { cpu: 50m, memory: 96Mi }
       limits: { memory: 384Mi }
@@ -122,6 +179,7 @@ services:
     secret: likho-analytics-secrets
     config: {}
     env: {}
+    ingressFrom: [likho-api]
     resources:
       requests: { cpu: 50m, memory: 64Mi }
       limits: { memory: 256Mi }
@@ -136,6 +194,7 @@ services:
     secret: likho-connector-ameyo-secrets
     config: {}
     env: {}
+    ingressFrom: [likho-api]                # the dialer's campaigns and agents (gRPC)
     resources:
       requests: { cpu: 50m, memory: 96Mi }
       limits: { memory: 384Mi }
@@ -149,6 +208,8 @@ services:
     readiness: { path: /healthz, port: http }
     liveness: { path: /healthz, port: http }
     securityContext: {}            # the nginx image starts as root and drops to nginx itself
+    ingressFrom: [likho-gateway]
+    autoscaling: { enabled: false, minReplicas: 2, maxReplicas: 4, cpu: 80 }
     resources:
       requests: { cpu: 10m, memory: 16Mi }
       limits: { memory: 64Mi }
@@ -160,6 +221,8 @@ services:
     readiness: { path: /healthz, port: http }
     liveness: { path: /healthz, port: http }
     securityContext: {}
+    ingressFrom: [likho-gateway]
+    autoscaling: { enabled: false, minReplicas: 2, maxReplicas: 4, cpu: 80 }
     resources:
       requests: { cpu: 10m, memory: 16Mi }
       limits: { memory: 64Mi }
@@ -171,6 +234,8 @@ services:
     readiness: { path: /healthz, port: http }
     liveness: { path: /healthz, port: http }
     securityContext: {}
+    ingressFrom: [likho-gateway]
+    autoscaling: { enabled: false, minReplicas: 2, maxReplicas: 4, cpu: 80 }
     resources:
       requests: { cpu: 10m, memory: 16Mi }
       limits: { memory: 64Mi }
@@ -182,6 +247,8 @@ services:
     readiness: { path: /healthz, port: http }
     liveness: { path: /healthz, port: http }
     securityContext: {}
+    ingressFrom: [likho-gateway]
+    autoscaling: { enabled: false, minReplicas: 2, maxReplicas: 4, cpu: 80 }
     resources:
       requests: { cpu: 10m, memory: 16Mi }
       limits: { memory: 64Mi }
@@ -193,6 +260,8 @@ services:
     readiness: { path: /healthz, port: http }
     liveness: { path: /healthz, port: http }
     securityContext: {}
+    ingressFrom: [likho-gateway]
+    autoscaling: { enabled: false, minReplicas: 2, maxReplicas: 4, cpu: 80 }
     resources:
       requests: { cpu: 10m, memory: 16Mi }
       limits: { memory: 64Mi }
@@ -204,6 +273,8 @@ services:
     readiness: { path: /healthz, port: http }
     liveness: { path: /healthz, port: http }
     securityContext: {}
+    ingressFrom: [likho-gateway]
+    autoscaling: { enabled: false, minReplicas: 2, maxReplicas: 4, cpu: 80 }
     resources:
       requests: { cpu: 10m, memory: 16Mi }
       limits: { memory: 64Mi }
@@ -225,6 +296,7 @@ gateway:
     admin: /mfe/admin/remoteEntry.js
     vocabulary: /mfe/vocabulary/remoteEntry.js
     insights: /mfe/insights/remoteEntry.js
+  autoscaling: { enabled: false, minReplicas: 2, maxReplicas: 6, cpu: 70 }
   resources:
     requests: { cpu: 50m, memory: 32Mi }
     limits: { memory: 128Mi }

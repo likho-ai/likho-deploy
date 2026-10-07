@@ -58,7 +58,7 @@ objectstore:
   resources:
     requests: { cpu: 100m, memory: 128Mi }
     limits: { memory: 384Mi }
-  buckets: [likho-audio, likho-normalized, likho-peaks, likho-models]
+  buckets: [likho-audio, likho-normalized, likho-peaks, likho-models, likho-backups]
 
 meilisearch:
   enabled: true
@@ -78,3 +78,46 @@ clickhouse:
   resources:
     requests: { cpu: 100m, memory: 512Mi }
     limits: { memory: 1536Mi }
+
+# Backups (templates/backup.yaml): nightly dumps of PostgreSQL, MongoDB and ClickHouse to S3,
+# and a monthly drill that restores the newest into scratch databases and checks it.
+# The default target is the in-cluster object store - fine to rehearse with, no use when the
+# cluster is lost: point s3 at storage outside it (another cloud's bucket) for real use.
+backup:
+  enabled: true
+  schedule: "30 2 * * *"           # every night (the cluster's time zone unless timeZone is set)
+  timeZone: ""                     # e.g. Asia/Kolkata
+  keepDays: 14
+  image: amazon/aws-cli:2.31.0
+  scratchSize: 20Gi                # the dumps are written to the pod's disk before the upload
+  deadlineSeconds: 7200
+  s3:
+    endpoint: http://objectstore:8333   # empty = AWS S3 itself
+    region: us-east-1
+    bucket: likho-backups
+    prefix: ""                     # empty = <namespace>/
+    secret: ""                     # empty = S3_ACCESS_KEY/S3_SECRET_KEY above; else a Secret
+                                   # with AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY
+  drill:
+    enabled: true
+    schedule: "0 4 1 * *"          # the first of every month
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { memory: 1Gi }
+
+# VolumeSnapshots of the volumes through the cluster's CSI snapshot class - the audio in the
+# object store is too big to dump every night. Needs the snapshot CRDs and a VolumeSnapshotClass.
+snapshots:
+  enabled: false
+  schedule: "0 3 * * *"
+  className: ""                    # empty = the cluster's default VolumeSnapshotClass
+  keepDays: 7
+  image: alpine/k8s:1.34.1
+  claims: [data-objectstore-0, data-postgres-0, data-mongo-0, data-clickhouse-0, data-nats-0]
+
+networkPolicy:
+  enabled: false
+  # Who may read NATS's monitoring port besides Likho's pods: KEDA (the queue's backlog), Prometheus.
+  natsMonitorFrom:
+    - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: keda } }
+    - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: monitoring } }

@@ -1,0 +1,368 @@
+{{- /*
+Backups of what cannot be rebuilt, and a drill that proves they restore.
+
+  likho-backup (nightly)        PostgreSQL (every likho_* database, pg_dump custom format, and the
+                                roles), MongoDB (one gzipped archive), ClickHouse (every table:
+                                its schema and its rows in Native format) - dumped side by side
+                                and copied to S3 under <prefix><UTC time>/, then copies older
+                                than keepDays are removed. LATEST names the newest.
+  likho-restore-drill (monthly) fetches LATEST, restores PostgreSQL into drill_<db> databases
+                                and MongoDB into drill_<db>, checks every table and collection
+                                came back, prints the counts, and drops the copies again.
+  likho-snapshot (optional)     VolumeSnapshots of the volumes (the audio above all, which is
+                                too big to dump), through the cluster's CSI snapshot class.
+
+Meilisearch is not dumped: likho-search rebuilds the index from the transcripts. Run one now:
+  kubectl -n <namespace> create job --from=cronjob/likho-backup likho-backup-now
+*/ -}}
+{{- if .Values.backup.enabled }}
+{{- $b := .Values.backup }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: likho-backup-scripts
+  labels: {{- include "likho-stack.labels" . | nindent 4 }}
+data:
+  dump-postgres.sh: |
+    #!/bin/sh
+    set -eu
+    export PGHOST=postgres PGUSER=postgres PGPASSWORD="$POSTGRES_PASSWORD"
+    mkdir -p /backup/postgres
+    # The roles without their passwords: those come back from the Secret on a new cluster.
+    pg_dumpall --globals-only --no-role-passwords > /backup/postgres/globals.sql
+    for db in $(psql -Atc "SELECT datname FROM pg_database WHERE datname LIKE 'likho\_%' ORDER BY 1"); do
+      pg_dump --format=custom --dbname="$db" --file="/backup/postgres/$db.dump"
+      echo "postgres $db: $(du -h "/backup/postgres/$db.dump" | cut -f1)"
+    done
+  dump-mongo.sh: |
+    #!/bin/sh
+    set -eu
+    mongodump --host mongo --username root --password "$MONGO_ROOT_PASSWORD" --authenticationDatabase admin \
+      --gzip --archive=/backup/mongo.archive.gz --quiet
+    echo "mongo: $(du -h /backup/mongo.archive.gz | cut -f1)"
+  dump-clickhouse.sh: |
+    #!/bin/sh
+    set -eu
+    ch() { clickhouse-client --host clickhouse --user likho_analytics --password "$CLICKHOUSE_PASSWORD" --database likho_analytics "$@"; }
+    mkdir -p /backup/clickhouse
+    for t in $(ch -q "SELECT name FROM system.tables WHERE database = 'likho_analytics' AND engine NOT LIKE '%View' ORDER BY name"); do
+      ch -q "SHOW CREATE TABLE \`$t\` FORMAT TSVRaw" > "/backup/clickhouse/$t.sql"
+      ch -q "SELECT * FROM \`$t\` FORMAT Native" | gzip > "/backup/clickhouse/$t.native.gz"
+      echo "clickhouse $t: $(du -h "/backup/clickhouse/$t.native.gz" | cut -f1)"
+    done
+  s3.sh: |
+    # Sourced: the aws command against the configured endpoint, path-style (SeaweedFS, MinIO).
+    export HOME=/tmp
+    aws configure set default.s3.addressing_style path
+    s3() { if [ -n "$S3_ENDPOINT" ]; then aws --endpoint-url "$S3_ENDPOINT" "$@"; else aws "$@"; fi; }
+  upload.sh: |
+    #!/bin/bash
+    set -euo pipefail
+    . /scripts/s3.sh
+    stamp=$(date -u +%Y-%m-%dT%H%M%SZ)
+    s3 s3 cp --recursive --only-show-errors /backup "s3://$S3_BUCKET/$S3_PREFIX$stamp/"
+    echo "$stamp" > /tmp/LATEST
+    s3 s3 cp --only-show-errors /tmp/LATEST "s3://$S3_BUCKET/${S3_PREFIX}LATEST"
+    echo "backed up to s3://$S3_BUCKET/$S3_PREFIX$stamp/"
+    # Remove the copies older than KEEP_DAYS (the names sort by time).
+    cutoff=$(date -u -d "$KEEP_DAYS days ago" +%Y-%m-%dT%H%M%SZ)
+    for p in $(s3 s3api list-objects-v2 --bucket "$S3_BUCKET" --prefix "$S3_PREFIX" --delimiter / \
+                 --query 'CommonPrefixes[].Prefix' --output text); do
+      [ "$p" = "None" ] && continue
+      name=${p#"$S3_PREFIX"}; name=${name%/}
+      if [[ "$name" < "$cutoff" ]]; then
+        s3 s3 rm --recursive --only-show-errors "s3://$S3_BUCKET/$p"
+        echo "removed $name"
+      fi
+    done
+  fetch.sh: |
+    #!/bin/bash
+    set -euo pipefail
+    . /scripts/s3.sh
+    stamp=${BACKUP_STAMP:-$(s3 s3 cp "s3://$S3_BUCKET/${S3_PREFIX}LATEST" - | tr -d '[:space:]')}
+    echo "restoring the backup of $stamp"
+    s3 s3 cp --recursive --only-show-errors "s3://$S3_BUCKET/$S3_PREFIX$stamp/" /backup/
+  drill-postgres.sh: |
+    #!/bin/sh
+    # Restores every database into drill_<db>, checks every table of the dump came back, and
+    # drops the copy. The live databases are only read.
+    set -eu
+    export PGHOST=postgres PGUSER=postgres PGPASSWORD="$POSTGRES_PASSWORD"
+    found=0
+    for f in /backup/postgres/*.dump; do
+      [ -e "$f" ] || break
+      found=1
+      db=$(basename "$f" .dump); scratch="drill_$db"
+      dropdb --if-exists "$scratch"; createdb "$scratch"
+      pg_restore --no-owner --no-acl --exit-on-error --dbname="$scratch" "$f"
+      # The dump's table of contents lists every table twice: TABLE and TABLE DATA.
+      want=$(pg_restore --list "$f" | grep ' TABLE ' | grep -vc ' TABLE DATA ' || true)
+      got=$(psql -d "$scratch" -Atc "SELECT count(*) FROM pg_tables WHERE schemaname NOT IN ('pg_catalog','information_schema')")
+      rows=$(psql -d "$scratch" -Atc "SELECT format('SELECT count(*) FROM %I.%I;', schemaname, tablename) FROM pg_tables WHERE schemaname NOT IN ('pg_catalog','information_schema')" \
+        | psql -d "$scratch" -At | awk '{ s += $1 } END { print s + 0 }')
+      dropdb "$scratch"
+      echo "postgres $db: $got of $want tables, $rows rows"
+      [ "$got" -eq "$want" ] || { echo "postgres $db: tables missing after the restore"; exit 1; }
+    done
+    [ "$found" -eq 1 ] || { echo "the backup holds no PostgreSQL dump"; exit 1; }
+  drill-mongo.sh: |
+    #!/bin/sh
+    set -eu
+    auth="--host mongo --username root --password $MONGO_ROOT_PASSWORD --authenticationDatabase admin"
+    mongorestore $auth --gzip --archive=/backup/mongo.archive.gz --quiet --drop \
+      --nsInclude 'likho_*.*' --nsFrom 'likho_$db$.$coll$' --nsTo 'drill_likho_$db$.$coll$'
+    mongosh $auth --quiet --eval '
+      const names = db.adminCommand({ listDatabases: 1, nameOnly: true }).databases
+        .map((d) => d.name).filter((n) => n.startsWith("drill_likho_"));
+      if (names.length === 0) throw new Error("the backup holds no likho database");
+      for (const name of names) {
+        const copy = db.getSiblingDB(name);
+        const live = db.getSiblingDB(name.slice("drill_".length));
+        let docs = 0;
+        for (const c of copy.getCollectionNames()) docs += copy.getCollection(c).countDocuments();
+        const got = copy.getCollectionNames().length, want = live.getCollectionNames().length;
+        copy.dropDatabase();
+        print(`mongo ${live.getName()}: ${got} collections (${want} live), ${docs} documents`);
+        if (got === 0) throw new Error(`${live.getName()}: nothing came back`);
+      }'
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: likho-backup
+  labels: {{- include "likho-stack.labels" . | nindent 4 }}
+spec:
+  schedule: {{ $b.schedule | quote }}
+  {{- with $b.timeZone }}
+  timeZone: {{ . | quote }}
+  {{- end }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: {{ $b.deadlineSeconds }}
+      template:
+        metadata:
+          labels: {{- include "likho-stack.selector" "likho-backup" | nindent 12 }}
+        spec:
+          restartPolicy: Never
+          securityContext:
+            seccompProfile: { type: RuntimeDefault }
+          # Every dump is written here first, then copied to S3 in one go.
+          initContainers:
+            {{- if .Values.postgres.enabled }}
+            - name: postgres
+              image: {{ .Values.postgres.image | quote }}
+              command: [sh, /scripts/dump-postgres.sh]
+              env:
+                - name: POSTGRES_PASSWORD
+                  valueFrom: { secretKeyRef: { name: {{ .Values.secrets.name }}, key: POSTGRES_PASSWORD } }
+              volumeMounts:
+                - { name: backup, mountPath: /backup }
+                - { name: scripts, mountPath: /scripts, readOnly: true }
+              resources: {{- toYaml $b.resources | nindent 16 }}
+            {{- end }}
+            {{- if .Values.mongo.enabled }}
+            - name: mongo
+              image: {{ .Values.mongo.image | quote }}
+              command: [sh, /scripts/dump-mongo.sh]
+              env:
+                - name: MONGO_ROOT_PASSWORD
+                  valueFrom: { secretKeyRef: { name: {{ .Values.secrets.name }}, key: MONGO_ROOT_PASSWORD } }
+              volumeMounts:
+                - { name: backup, mountPath: /backup }
+                - { name: scripts, mountPath: /scripts, readOnly: true }
+              resources: {{- toYaml $b.resources | nindent 16 }}
+            {{- end }}
+            {{- if .Values.clickhouse.enabled }}
+            - name: clickhouse
+              image: {{ .Values.clickhouse.image | quote }}
+              command: [sh, /scripts/dump-clickhouse.sh]
+              env:
+                - name: CLICKHOUSE_PASSWORD
+                  valueFrom: { secretKeyRef: { name: {{ .Values.secrets.name }}, key: CLICKHOUSE_PASSWORD } }
+              volumeMounts:
+                - { name: backup, mountPath: /backup }
+                - { name: scripts, mountPath: /scripts, readOnly: true }
+              resources: {{- toYaml $b.resources | nindent 16 }}
+            {{- end }}
+          containers:
+            - name: upload
+              image: {{ $b.image | quote }}
+              command: [bash, /scripts/upload.sh]
+              env:
+                {{- include "likho-stack.backupEnv" . | nindent 16 }}
+                - { name: KEEP_DAYS, value: {{ $b.keepDays | quote }} }
+              volumeMounts:
+                - { name: backup, mountPath: /backup, readOnly: true }
+                - { name: scripts, mountPath: /scripts, readOnly: true }
+              resources: {{- toYaml $b.resources | nindent 16 }}
+          volumes:
+            - name: backup
+              emptyDir: { sizeLimit: {{ $b.scratchSize }} }
+            - name: scripts
+              configMap: { name: likho-backup-scripts }
+{{- if $b.drill.enabled }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: likho-restore-drill
+  labels: {{- include "likho-stack.labels" . | nindent 4 }}
+spec:
+  schedule: {{ $b.drill.schedule | quote }}
+  {{- with $b.timeZone }}
+  timeZone: {{ . | quote }}
+  {{- end }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: {{ $b.deadlineSeconds }}
+      template:
+        metadata:
+          labels: {{- include "likho-stack.selector" "likho-restore-drill" | nindent 12 }}
+        spec:
+          restartPolicy: Never
+          securityContext:
+            seccompProfile: { type: RuntimeDefault }
+          initContainers:
+            - name: fetch
+              image: {{ $b.image | quote }}
+              command: [bash, /scripts/fetch.sh]
+              env:
+                {{- include "likho-stack.backupEnv" . | nindent 16 }}
+              volumeMounts:
+                - { name: backup, mountPath: /backup }
+                - { name: scripts, mountPath: /scripts, readOnly: true }
+              resources: {{- toYaml $b.resources | nindent 16 }}
+            {{- if .Values.postgres.enabled }}
+            - name: postgres
+              image: {{ .Values.postgres.image | quote }}
+              command: [sh, /scripts/drill-postgres.sh]
+              env:
+                - name: POSTGRES_PASSWORD
+                  valueFrom: { secretKeyRef: { name: {{ .Values.secrets.name }}, key: POSTGRES_PASSWORD } }
+              volumeMounts:
+                - { name: backup, mountPath: /backup, readOnly: true }
+                - { name: scripts, mountPath: /scripts, readOnly: true }
+              resources: {{- toYaml $b.resources | nindent 16 }}
+            {{- end }}
+            {{- if .Values.mongo.enabled }}
+            - name: mongo
+              image: {{ .Values.mongo.image | quote }}
+              command: [sh, /scripts/drill-mongo.sh]
+              env:
+                - name: MONGO_ROOT_PASSWORD
+                  valueFrom: { secretKeyRef: { name: {{ .Values.secrets.name }}, key: MONGO_ROOT_PASSWORD } }
+              volumeMounts:
+                - { name: backup, mountPath: /backup, readOnly: true }
+                - { name: scripts, mountPath: /scripts, readOnly: true }
+              resources: {{- toYaml $b.resources | nindent 16 }}
+            {{- end }}
+          # Reached only when every restore above passed (an init container that fails stops the pod).
+          containers:
+            - name: passed
+              image: {{ $b.image | quote }}
+              command: [bash, -c, 'echo "the restore drill passed: $(ls /backup)"']
+              volumeMounts:
+                - { name: backup, mountPath: /backup, readOnly: true }
+              resources:
+                requests: { cpu: 10m, memory: 16Mi }
+                limits: { memory: 64Mi }
+          volumes:
+            - name: backup
+              emptyDir: { sizeLimit: {{ $b.scratchSize }} }
+            - name: scripts
+              configMap: { name: likho-backup-scripts }
+{{- end }}
+{{- end }}
+{{- if .Values.snapshots.enabled }}
+{{- $s := .Values.snapshots }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: likho-snapshot
+  labels: {{- include "likho-stack.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: likho-snapshot
+  labels: {{- include "likho-stack.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [snapshot.storage.k8s.io]
+    resources: [volumesnapshots]
+    verbs: [get, list, create, delete]
+  - apiGroups: [""]
+    resources: [persistentvolumeclaims]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: likho-snapshot
+  labels: {{- include "likho-stack.labels" . | nindent 4 }}
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: likho-snapshot }
+subjects:
+  - { kind: ServiceAccount, name: likho-snapshot, namespace: {{ .Release.Namespace }} }
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: likho-snapshot
+  labels: {{- include "likho-stack.labels" . | nindent 4 }}
+spec:
+  schedule: {{ $s.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        metadata:
+          labels: {{- include "likho-stack.selector" "likho-snapshot" | nindent 12 }}
+        spec:
+          serviceAccountName: likho-snapshot
+          restartPolicy: Never
+          securityContext:
+            seccompProfile: { type: RuntimeDefault }
+          containers:
+            - name: snapshot
+              image: {{ $s.image | quote }}
+              command:
+                - sh
+                - -c
+                - |
+                  set -eu
+                  stamp=$(date -u +%Y%m%d-%H%M)
+                  for claim in {{ join " " $s.claims }}; do
+                    kubectl get pvc "$claim" >/dev/null 2>&1 || { echo "no claim $claim, skipped"; continue; }
+                    kubectl apply -f - <<EOF
+                  apiVersion: snapshot.storage.k8s.io/v1
+                  kind: VolumeSnapshot
+                  metadata:
+                    name: $claim-$stamp
+                    labels: { likho.ai/snapshot: "true", likho.ai/claim: "$claim" }
+                  spec:
+                    {{- with $s.className }}
+                    volumeSnapshotClassName: {{ . }}
+                    {{- end }}
+                    source: { persistentVolumeClaimName: "$claim" }
+                  EOF
+                  done
+                  # Keep keepDays of them.
+                  cutoff=$(date -u -d "@$(( $(date +%s) - {{ $s.keepDays }} * 86400 ))" +%Y-%m-%dT%H:%M:%SZ)
+                  kubectl get volumesnapshot -l likho.ai/snapshot=true -o json \
+                    | jq -r --arg cutoff "$cutoff" '.items[] | select(.metadata.creationTimestamp < $cutoff) | .metadata.name' \
+                    | xargs -r kubectl delete volumesnapshot
+              resources:
+                requests: { cpu: 10m, memory: 32Mi }
+                limits: { memory: 128Mi }
+{{- end }}

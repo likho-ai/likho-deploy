@@ -1,0 +1,54 @@
+{{- /*
+Who may open a connection to whom. Every pod of the product gets a policy, so anything not
+listed here is refused: a service is reached only by the services that call it (`ingressFrom`
+in values.yaml, the same graph as the addresses in the .env files), its metrics only by the
+cluster's Prometheus (networkPolicy.metricsFrom), and from outside only through the gateway.
+Outgoing traffic is not limited (the dialer, the language model and S3 live outside).
+Needs a CNI that enforces NetworkPolicy (Calico, Cilium, the cloud's own); elsewhere it is inert.
+*/ -}}
+{{- if .Values.networkPolicy.enabled }}
+{{- $np := .Values.networkPolicy }}
+{{- range $name, $svc := .Values.services }}
+{{- if include "likho.enabled" $svc }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $name }}
+  labels: {{- include "likho.labels" $ | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{- include "likho.selector" $name | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    {{- with $svc.ingressFrom }}
+    - from:
+        {{- range . }}
+        - podSelector:
+            matchLabels: {{- include "likho.selector" . | nindent 14 }}
+        {{- end }}
+    {{- end }}
+    {{- if and (ne ($svc.metrics | default true) false) $np.metricsFrom }}
+    - from: {{- toYaml $np.metricsFrom | nindent 8 }}
+      ports:
+        - port: http
+    {{- end }}
+{{- end }}
+{{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: likho-gateway
+  labels: {{- include "likho.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{- include "likho.selector" "likho-gateway" | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        - port: http
+      {{- with $np.gatewayFrom }}
+      from: {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

@@ -1,0 +1,41 @@
+{{- /*
+The backing services are reached only from Likho's own pods in this namespace (the services,
+the backup jobs: everything labelled app.kubernetes.io/instance=likho). NATS's monitoring port
+is also open to KEDA (it reads the job queue's backlog there) and to Prometheus.
+Needs a CNI that enforces NetworkPolicy; elsewhere it is inert.
+*/ -}}
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: likho-stack
+  labels: {{- include "likho-stack.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchExpressions:
+      - { key: app.kubernetes.io/instance, operator: In, values: [likho] }
+      - key: app.kubernetes.io/name
+        operator: In
+        values: [postgres, mongo, redis, nats, objectstore, meilisearch, clickhouse]
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: { app.kubernetes.io/instance: likho }
+{{- with .Values.networkPolicy.natsMonitorFrom }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: likho-stack-nats-monitor
+  labels: {{- include "likho-stack.labels" $ | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{- include "likho-stack.selector" "nats" | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from: {{- toYaml . | nindent 8 }}
+      ports:
+        - port: 8222
+{{- end }}
+{{- end }}

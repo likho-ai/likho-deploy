@@ -1,11 +1,15 @@
 {{- /*
-One ConfigMap, one Service and one Deployment per entry of .Values.services (and a
-PersistentVolumeClaim per volume it asks for). The container's environment is the ConfigMap,
-then the Secret, then the explicit `env` values - a later source wins.
+One ConfigMap, one Service and one workload per entry of .Values.services. The workload is a
+Deployment (with a PersistentVolumeClaim per volume it asks for), or a StatefulSet when the
+service says `kind: StatefulSet` - then every pod gets volumes of its own (volumeClaimTemplates),
+which is what lets a worker with a model cache run more than one replica. The container's
+environment is the ConfigMap, then the Secret, then the explicit `env` values - a later source wins.
 */ -}}
 {{- range $name, $svc := .Values.services }}
-{{- if not (and (hasKey $svc "enabled") (not $svc.enabled)) }}
+{{- if include "likho.enabled" $svc }}
 {{- $probePort := "http" }}
+{{- $kind := $svc.kind | default "Deployment" }}
+{{- $replicas := int (include "likho.minReplicas" (dict "ctx" $ "svc" $svc)) }}
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -33,6 +37,7 @@ spec:
       port: {{ $port }}
       targetPort: {{ $portName }}
     {{- end }}
+{{- if ne $kind "StatefulSet" }}
 {{- range $volume := ($svc.volumes | default list) }}
 ---
 apiVersion: v1
@@ -47,22 +52,33 @@ spec:
   {{- end }}
   resources: { requests: { storage: {{ $volume.size }} } }
 {{- end }}
+{{- end }}
 ---
 apiVersion: apps/v1
-kind: Deployment
+kind: {{ $kind }}
 metadata:
   name: {{ $name }}
   labels: {{- include "likho.labels" $ | nindent 4 }}
 spec:
+  {{- if not (include "likho.autoscaled" (dict "ctx" $ "svc" $svc)) }}
   replicas: {{ $svc.replicas | default 1 }}
-  {{- if $svc.volumes }}
+  {{- end }}
+  {{- if eq $kind "StatefulSet" }}
+  serviceName: {{ $name }}
+  # Workers are interchangeable: start and stop them together, not one ordinal at a time.
+  podManagementPolicy: Parallel
+  {{- else if $svc.volumes }}
   strategy: { type: Recreate }   # a ReadWriteOnce volume: the new pod waits for the old one
   {{- end }}
   selector:
     matchLabels: {{- include "likho.selector" $name | nindent 6 }}
   template:
     metadata:
-      labels: {{- include "likho.selector" $name | nindent 8 }}
+      labels:
+        {{- include "likho.selector" $name | nindent 8 }}
+        {{- if ne ($svc.metrics | default true) false }}
+        likho.ai/metrics: "true"        # the PodMonitor scrapes these (templates/alerts.yaml)
+        {{- end }}
       annotations:
         # A changed setting restarts the pods, so a ConfigMap edit is never silently ignored.
         checksum/config: {{ ($svc.config | default dict) | toJson | sha256sum }}
@@ -82,6 +98,18 @@ spec:
         {{- range . }}
         - name: {{ . }}
         {{- end }}
+      {{- end }}
+      {{- with $svc.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $svc.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $svc.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if or (gt $replicas 1) (include "likho.autoscaled" (dict "ctx" $ "svc" $svc)) }}
+      {{- include "likho.spread" (dict "ctx" $ "name" $name) | nindent 6 }}
       {{- end }}
       securityContext:
         seccompProfile: { type: RuntimeDefault }
@@ -135,12 +163,26 @@ spec:
             {{- end }}
           {{- end }}
           resources: {{- toYaml ($svc.resources | default dict) | nindent 12 }}
-      {{- with $svc.volumes }}
+      {{- if and $svc.volumes (ne $kind "StatefulSet") }}
       volumes:
-        {{- range . }}
+        {{- range $svc.volumes }}
         - name: {{ .name }}
           persistentVolumeClaim: { claimName: {{ $name }}-{{ .name }} }
         {{- end }}
       {{- end }}
+  {{- if and $svc.volumes (eq $kind "StatefulSet") }}
+  volumeClaimTemplates:
+    {{- range $svc.volumes }}
+    - metadata:
+        name: {{ .name }}
+        labels: {{- include "likho.selector" $name | nindent 10 }}
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- if .storageClass }}
+        storageClassName: {{ .storageClass | quote }}
+        {{- end }}
+        resources: { requests: { storage: {{ .size }} } }
+    {{- end }}
+  {{- end }}
 {{- end }}
 {{- end }}

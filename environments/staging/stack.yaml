@@ -5,3 +5,7 @@ mongo: { storage: 10Gi }
 nats: { storage: 5Gi }
 objectstore: { storage: 50Gi }
 meilisearch: { storage: 5Gi }
+
+# The databases only reachable from Likho's pods; nightly dumps (in-cluster) and the monthly drill.
+networkPolicy: { enabled: true }
+backup: { timeZone: Asia/Kolkata }

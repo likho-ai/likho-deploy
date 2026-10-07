@@ -86,10 +86,16 @@ spec:
           readinessProbe:
             httpGet: { path: /cluster/healthz, port: master }
             periodSeconds: 5
+          # Up to 10 minutes to start (loading the volumes after an unclean stop); see postgres.yaml.
+          startupProbe:
+            httpGet: { path: /cluster/healthz, port: master }
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 60
           livenessProbe:
             httpGet: { path: /cluster/healthz, port: master }
-            initialDelaySeconds: 20
             periodSeconds: 15
+            timeoutSeconds: 5
           resources: {{- toYaml .Values.objectstore.resources | nindent 12 }}
         - name: buckets
           image: {{ .Values.objectstore.image | quote }}

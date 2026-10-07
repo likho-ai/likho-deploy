@@ -5,8 +5,10 @@ roll it out - the same charts for your machine, staging and production.
 
 ```
 likho-deploy
-├── charts/likho-stack      the backing services: PostgreSQL, MongoDB, Redis, NATS, SeaweedFS (S3), Meilisearch
-├── charts/likho            the product: four services, the three web apps, the gateway, the public route
+├── charts/likho-stack      the backing services: PostgreSQL, MongoDB, Redis, NATS, SeaweedFS (S3), Meilisearch,
+│                           ClickHouse; backups, the restore drill, snapshots, their NetworkPolicy
+├── charts/likho            the product: the services, the web apps, the gateway, the public route; scaling
+│                           (HPA, KEDA), disruption budgets, NetworkPolicies, alerts
 ├── environments/
 │   ├── local/              minikube on your machine (the staging configuration at http://localhost:8080)
 │   ├── staging/            env.yaml (synced settings), values.yaml (images, hostname), stack.yaml
@@ -88,6 +90,43 @@ the browser talks to.
 
 Managed databases or object storage: disable the part in `environments/<environment>/stack.yaml`
 and point the service's `.env.<environment>.local` at the managed address.
+
+## Scale and operations
+
+What the charts do in a real cluster, and what the cluster must have for it:
+
+| Part | What it does | Switch | The cluster needs |
+| --- | --- | --- | --- |
+| Worker scaling | The transcription worker is a StatefulSet (a model cache per pod); a KEDA `ScaledObject` adds a pod per job waiting on the `likho-transcription-requested` consumer, up to `keda.maxReplicas`, and removes them slowly (a stopping pod finishes its job: 15 minutes' grace) | `keda.enabled`, `services.likho-transcription.keda` | [KEDA](https://keda.sh) (`helm install keda kedacore/keda -n keda --create-namespace`) |
+| HPA | likho-api, the gateway and the web apps on CPU (two pods at least) | `services.<name>.autoscaling`, `gateway.autoscaling` | metrics-server |
+| Disruption budgets | every workload with two pods or more keeps all but one through a drain or an upgrade; pods are spread over nodes and zones | `podDisruptionBudgets`, `spreadPods` | - |
+| NetworkPolicies | a service is reachable only by the services that call it (`ingressFrom`), the databases only by Likho's pods, NATS's monitoring port also by KEDA and Prometheus; outgoing traffic is free | `networkPolicy.enabled` (both charts) | a CNI that enforces them (Calico, Cilium, the cloud's own) |
+| Alerts | a `PodMonitor` for every `/metrics` and a `PrometheusRule`: a job waiting too long, failures, no worker, restarts, volumes filling, a backup failed or missing | `alerts.enabled`, `alerts.labels` | kube-prometheus-stack (the operator, kube-state-metrics) |
+| Backups | nightly `likho-backup`: PostgreSQL (`pg_dump` of every `likho_*` database and the roles), MongoDB (`mongodump`), ClickHouse (every table) to S3 under `<namespace>/<UTC time>/`, `keepDays` kept | `backup` in the stack values | an S3 bucket outside the cluster for real use (`backup.s3`) |
+| Restore drill | monthly `likho-restore-drill`: the newest backup restored into scratch databases, every table and collection checked, then dropped | `backup.drill` | - |
+| Snapshots | nightly `VolumeSnapshot`s of the volumes (the audio is too big to dump) | `snapshots` in the stack values | the CSI snapshot CRDs and a `VolumeSnapshotClass` |
+| GPU | `ghcr.io/likho-ai/likho-transcription:<tag>-cuda` (CUDA 12, cuDNN 9) on a GPU node pool: see the commented block in `environments/production/values.yaml` | `image`, `resources`, `nodeSelector`, `tolerations` | GPU nodes with the NVIDIA device plugin |
+
+Production switches all of these on (`environments/production/values.yaml`, `stack.yaml`); the
+product chart refuses to render when KEDA or the Prometheus Operator is missing, rather than
+failing halfway through an upgrade. Staging has the policies and the backups.
+
+Backups by hand:
+
+```powershell
+kubectl -n likho-production create job --from=cronjob/likho-backup likho-backup-now
+kubectl -n likho-production create job --from=cronjob/likho-restore-drill likho-drill-now
+kubectl -n likho-production logs job/likho-drill-now --all-containers --prefix
+```
+
+To restore for real, run the drill's steps against the live names: fetch the backup
+(`BACKUP_STAMP` picks one other than the newest), `pg_restore --clean --if-exists -d <db>` each
+dump, `mongorestore --drop --gzip --archive`, and recreate each ClickHouse table from its `.sql`
+then `INSERT ... FORMAT Native`. Stop the services first (`kubectl scale --replicas=0`).
+Meilisearch is not backed up: likho-search rebuilds the index from the transcripts.
+
+The first upgrade to these charts replaces the transcription Deployment with a StatefulSet; its
+old model volume is removed and each worker downloads the model once into its own.
 
 ## Develop
 

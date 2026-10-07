@@ -75,10 +75,17 @@ spec:
           readinessProbe:
             exec: { command: [pg_isready, -U, postgres] }
             periodSeconds: 5
+          # Up to 10 minutes to start: crash recovery on a slow disk takes minutes, and a liveness
+          # probe that fires during it restarts the recovery from the beginning, for ever.
+          startupProbe:
+            exec: { command: [pg_isready, -U, postgres] }
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 60
           livenessProbe:
             exec: { command: [pg_isready, -U, postgres] }
-            initialDelaySeconds: 30
             periodSeconds: 15
+            timeoutSeconds: 5
           resources: {{- toYaml .Values.postgres.resources | nindent 12 }}
       volumes:
         - name: init

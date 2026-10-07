@@ -1,13 +1,23 @@
-# Production: pinned images only (never a floating tag), two replicas of what the browser
-# talks to, the public hostname through the cluster's Gateway (TLS ends there).
+# Production: pinned images only (never a floating tag), two pods or more of what the browser
+# talks to (scaled on CPU), the transcription workers scaled on the job queue (KEDA), every
+# service reachable only by its callers (NetworkPolicy), alerts for the cluster's Prometheus,
+# and the public hostname through the cluster's Gateway (TLS ends there).
+# The cluster needs KEDA, kube-prometheus-stack and a CNI that enforces NetworkPolicy - see the
+# README, "Scale and operations"; the chart refuses to render without the first two.
 # To release: put the tested tag (sha-<commit> or a version) on the image line, commit, and
-# `skaffold run -p production`. Rolling back is the same change the other way.
+# `.\scripts\deploy.ps1 production`. Rolling back is the same change the other way.
 imagePullSecrets: [ghcr-pull]
+
+keda: { enabled: true }
+networkPolicy: { enabled: true }
+alerts:
+  enabled: true
+  labels: { release: kube-prometheus-stack }   # what the operator's ruleSelector picks up
 
 services:
   likho-api:
     image: ghcr.io/likho-ai/likho-api:latest     # CHANGE to a pinned tag before the first release
-    replicas: 2
+    autoscaling: { enabled: true, minReplicas: 2, maxReplicas: 6 }
     resources:
       requests: { cpu: 250m, memory: 256Mi }
       limits: { memory: 1Gi }
@@ -19,38 +29,48 @@ services:
       limits: { memory: 1Gi }
   likho-transcription:
     image: ghcr.io/likho-ai/likho-transcription:latest
-    replicas: 1                                   # one model in memory per replica; scale by nodes
+    # One model in memory per pod; KEDA adds a pod per waiting job up to maxReplicas, and the
+    # cluster autoscaler adds the nodes they need.
+    keda: { enabled: true, minReplicas: 1, maxReplicas: 4 }
     resources:
       requests: { cpu: "2", memory: 3Gi }
       limits: { memory: 6Gi }
+    # On a GPU node pool: the -cuda image and one GPU per pod (about 10x the CPU speed).
+    # Uncomment with the pool's own label and taint; DEVICE=auto picks the GPU by itself.
+    # image: ghcr.io/likho-ai/likho-transcription:latest-cuda
+    # resources:
+    #   requests: { cpu: "1", memory: 4Gi, nvidia.com/gpu: 1 }
+    #   limits: { memory: 8Gi, nvidia.com/gpu: 1 }
+    # nodeSelector: { cloud.google.com/gke-accelerator: nvidia-l4 }
+    # tolerations: [{ key: nvidia.com/gpu, operator: Exists, effect: NoSchedule }]
   likho-language:
     image: ghcr.io/likho-ai/likho-language:latest
     replicas: 2
   likho-web-shell:
     image: ghcr.io/likho-ai/likho-web-shell:latest
-    replicas: 2
+    autoscaling: { enabled: true }
   likho-mfe-library:
     image: ghcr.io/likho-ai/likho-mfe-library:latest
-    replicas: 2
+    autoscaling: { enabled: true }
   likho-mfe-transcript:
     image: ghcr.io/likho-ai/likho-mfe-transcript:latest
-    replicas: 2
+    autoscaling: { enabled: true }
   likho-mfe-admin:
     image: ghcr.io/likho-ai/likho-mfe-admin:latest
-    replicas: 2
+    autoscaling: { enabled: true }
   likho-mfe-vocabulary:
     image: ghcr.io/likho-ai/likho-mfe-vocabulary:latest
-    replicas: 2
+    autoscaling: { enabled: true }
   likho-insights:
     image: ghcr.io/likho-ai/likho-insights:latest   # CHANGE to a pinned tag before the first release
   likho-analytics:
     image: ghcr.io/likho-ai/likho-analytics:latest  # CHANGE to a pinned tag before the first release
   likho-mfe-insights:
     image: ghcr.io/likho-ai/likho-mfe-insights:latest
-    replicas: 2
+    autoscaling: { enabled: true }
 
 gateway:
-  replicas: 2
+  autoscaling: { enabled: true }
 
 route:
   enabled: false                    # switch on with the production domain

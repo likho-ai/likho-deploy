@@ -144,7 +144,9 @@ metadata:
   name: likho-gateway
   labels: {{- include "likho.labels" . | nindent 4 }}
 spec:
+  {{- if not (and $g.autoscaling $g.autoscaling.enabled) }}
   replicas: {{ $g.replicas }}
+  {{- end }}
   selector:
     matchLabels: {{- include "likho.selector" "likho-gateway" | nindent 6 }}
   template:
@@ -153,6 +155,9 @@ spec:
       annotations:
         checksum/config: {{ (dict "nginx" $g "api" $api "media" $media "shell" $shell "library" $library "transcript" $transcript) | toJson | sha256sum }}
     spec:
+      {{- if or (gt (int $g.replicas) 1) (and $g.autoscaling $g.autoscaling.enabled) }}
+      {{- include "likho.spread" (dict "ctx" $ "name" "likho-gateway") | nindent 6 }}
+      {{- end }}
       securityContext:
         seccompProfile: { type: RuntimeDefault }
       containers:

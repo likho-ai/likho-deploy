@@ -1,0 +1,128 @@
+{{- /*
+Alerts, as a PrometheusRule for the Prometheus Operator (kube-prometheus-stack). The job
+numbers are the services' own /metrics (the same expressions as the Grafana dashboard
+"Likho - jobs and services"); disks and backups come from the kubelet and kube-state-metrics.
+*/ -}}
+{{- if .Values.alerts.enabled }}
+{{- if not (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1") }}
+{{- fail "alerts.enabled is set but the cluster has no Prometheus Operator (monitoring.coreos.com/v1): install kube-prometheus-stack first, or set alerts.enabled: false" }}
+{{- end }}
+{{- $a := .Values.alerts }}
+{{- $ns := .Release.Namespace }}
+# The operator does not read the prometheus.io annotations: this tells it to scrape /metrics
+# on every pod that serves it (the label likho.ai/metrics, set in templates/services.yaml).
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: likho
+  labels:
+    {{- include "likho.labels" . | nindent 4 }}
+    {{- with $a.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: likho
+      likho.ai/metrics: "true"
+  podMetricsEndpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: likho
+  labels:
+    {{- include "likho.labels" . | nindent 4 }}
+    {{- with $a.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: likho.jobs
+      rules:
+        - alert: LikhoQueueWaiting
+          # Counted in the database: every likho-api reports the same number, so max, not sum.
+          expr: max(likho_jobs_queue_oldest_seconds{namespace="{{ $ns }}"}) > {{ mul $a.queueOldestMinutes 60 }}
+          for: 5m
+          labels: { severity: warning }
+          annotations:
+            summary: A transcription job has waited more than {{ $a.queueOldestMinutes }} minutes
+            description: >-
+              The oldest queued job has waited {{ "{{" }} $value | humanizeDuration {{ "}}" }}. Either no
+              worker is running (kubectl -n {{ $ns }} get pods -l app.kubernetes.io/name=likho-transcription)
+              or there are more calls than workers (raise keda.maxReplicas, or add nodes).
+        - alert: LikhoJobsFailing
+          expr: sum(increase(likho_jobs_finished_total{namespace="{{ $ns }}",status="failed"}[1h])) > {{ $a.failedJobsPerHour }}
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: More than {{ $a.failedJobsPerHour }} transcriptions failed in the last hour
+            description: The jobs page says why each one failed; the worker's log says more.
+        - alert: LikhoJobsStalling
+          expr: sum(increase(likho_job_sweeps_total{namespace="{{ $ns }}",outcome="failed"}[1h])) > 0
+          for: 0m
+          labels: { severity: info }
+          annotations:
+            summary: The sweeper failed a stuck or stalled job in the last hour
+            description: A worker stopped reporting progress (killed, out of memory, or a cold model load longer than JOB_STALL_MAX_MINUTES).
+        - alert: LikhoNoWorker
+          expr: |
+            max(likho_jobs{namespace="{{ $ns }}",status="queued"}) > 0
+              and on() absent(up{namespace="{{ $ns }}",pod=~"likho-transcription-.*"} == 1)
+          for: 10m
+          labels: { severity: critical }
+          annotations:
+            summary: Jobs are waiting and no transcription worker is up
+    - name: likho.pods
+      rules:
+        - alert: LikhoPodRestarting
+          expr: increase(kube_pod_container_status_restarts_total{namespace="{{ $ns }}"}[30m]) > 3
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ "{{" }} $labels.pod {{ "}}" }} restarted more than 3 times in 30 minutes"
+            description: "kubectl -n {{ $ns }} logs {{ "{{" }} $labels.pod {{ "}}" }} --previous"
+        - alert: LikhoPodNotReady
+          expr: sum by (pod) (kube_pod_status_ready{namespace="{{ $ns }}",condition="false"}) > 0
+          for: 15m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ "{{" }} $labels.pod {{ "}}" }} has not been ready for 15 minutes"
+    - name: likho.storage
+      rules:
+        - alert: LikhoVolumeFilling
+          expr: |
+            100 * kubelet_volume_stats_available_bytes{namespace="{{ $ns }}"}
+              / kubelet_volume_stats_capacity_bytes{namespace="{{ $ns }}"} < {{ $a.diskFreePercent }}
+          for: 15m
+          labels: { severity: warning }
+          annotations:
+            summary: "Volume {{ "{{" }} $labels.persistentvolumeclaim {{ "}}" }} has less than {{ $a.diskFreePercent }}% free"
+            description: Grow the claim (the storage class must allow expansion) or the matching `storage` in the environment's stack.yaml.
+        - alert: LikhoVolumeFullIn24h
+          expr: |
+            predict_linear(kubelet_volume_stats_available_bytes{namespace="{{ $ns }}"}[6h], 24 * 3600) < 0
+              and kubelet_volume_stats_available_bytes{namespace="{{ $ns }}"} > 0
+          for: 1h
+          labels: { severity: critical }
+          annotations:
+            summary: "Volume {{ "{{" }} $labels.persistentvolumeclaim {{ "}}" }} will be full within a day at this rate"
+    - name: likho.backups
+      rules:
+        - alert: LikhoBackupFailed
+          expr: |
+            kube_job_status_failed{namespace="{{ $ns }}",job_name=~"likho-backup-.*"} > 0
+          labels: { severity: critical }
+          annotations:
+            summary: "Backup {{ "{{" }} $labels.job_name {{ "}}" }} failed"
+            description: "kubectl -n {{ $ns }} logs job/{{ "{{" }} $labels.job_name {{ "}}" }} --all-containers"
+        - alert: LikhoBackupMissing
+          expr: |
+            time() - kube_cronjob_status_last_successful_time{namespace="{{ $ns }}",cronjob="likho-backup"} > 26 * 3600
+          for: 30m
+          labels: { severity: critical }
+          annotations:
+            summary: No successful backup in more than a day
+{{- end }}

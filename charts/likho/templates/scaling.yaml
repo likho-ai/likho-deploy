@@ -1,0 +1,97 @@
+{{- /*
+How many pods each workload runs, and how many may be taken away at once.
+
+  autoscaling:  a HorizontalPodAutoscaler on CPU (likho-api, the gateway, the web apps)
+  keda:         a KEDA ScaledObject on the job queue's backlog (the transcription worker); needs
+                KEDA in the cluster and .Values.keda.enabled
+  PodDisruptionBudget: every workload that runs two pods or more keeps all but one through a
+                node drain or an upgrade. A single pod gets none, or it could never be drained.
+*/ -}}
+{{- if and .Values.keda.enabled (not (.Capabilities.APIVersions.Has "keda.sh/v1alpha1")) }}
+{{- fail "keda.enabled is set but the cluster has no KEDA (keda.sh/v1alpha1): install it first (README, Scale and operations), or set keda.enabled: false" }}
+{{- end }}
+{{- $services := .Values.services | default dict }}
+{{- $all := dict }}
+{{- range $name, $svc := $services }}
+{{- if include "likho.enabled" $svc }}
+{{- $_ := set $all $name $svc }}
+{{- end }}
+{{- end }}
+{{- $_ := set $all "likho-gateway" (dict "replicas" .Values.gateway.replicas "autoscaling" .Values.gateway.autoscaling "kind" "Deployment") }}
+{{- range $name, $svc := $all }}
+{{- $min := int (include "likho.minReplicas" (dict "ctx" $ "svc" $svc)) }}
+{{- if include "likho.keda" (dict "ctx" $ "svc" $svc) }}
+{{- $k := $svc.keda }}
+---
+# The worker follows the queue: one more pod per `lagThreshold` jobs waiting, down to
+# minReplicas when it is empty. A pod being stopped finishes the job in hand first
+# (terminationGracePeriodSeconds), and scaling down is slow so a cold model load is not wasted.
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ $name }}
+  labels: {{- include "likho.labels" $ | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: {{ $svc.kind | default "Deployment" }}
+    name: {{ $name }}
+  minReplicaCount: {{ $k.minReplicas | default 1 }}
+  maxReplicaCount: {{ $k.maxReplicas | default 4 }}
+  pollingInterval: {{ $k.pollingInterval | default 15 }}
+  cooldownPeriod: {{ $k.cooldownPeriod | default 600 }}
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleUp:
+          stabilizationWindowSeconds: 0
+          policies: [{ type: Pods, value: 2, periodSeconds: 60 }]
+        scaleDown:
+          stabilizationWindowSeconds: {{ $k.scaleDownStabilizationSeconds | default 600 }}
+          policies: [{ type: Pods, value: 1, periodSeconds: 300 }]
+  triggers:
+    - type: nats-jetstream
+      metadata:
+        natsServerMonitoringEndpoint: {{ $.Values.keda.natsMonitoringEndpoint | default (printf "nats.%s.svc.%s:8222" $.Release.Namespace $.Values.clusterDomain) | quote }}
+        account: {{ $.Values.keda.natsAccount | quote }}
+        stream: {{ $k.stream | quote }}
+        consumer: {{ $k.consumer | quote }}
+        lagThreshold: {{ $k.lagThreshold | default 1 | quote }}
+        activationLagThreshold: {{ $k.activationLagThreshold | default 0 | quote }}
+{{- else if and $svc.autoscaling $svc.autoscaling.enabled }}
+{{- $a := $svc.autoscaling }}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ $name }}
+  labels: {{- include "likho.labels" $ | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: {{ $svc.kind | default "Deployment" }}
+    name: {{ $name }}
+  minReplicas: {{ $a.minReplicas | default 1 }}
+  maxReplicas: {{ $a.maxReplicas | default 4 }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: { type: Utilization, averageUtilization: {{ $a.cpu | default 70 }} }
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+{{- end }}
+{{- if and $.Values.podDisruptionBudgets (gt $min 1) }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $name }}
+  labels: {{- include "likho.labels" $ | nindent 4 }}
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels: {{- include "likho.selector" $name | nindent 6 }}
+{{- end }}
+{{- end }}

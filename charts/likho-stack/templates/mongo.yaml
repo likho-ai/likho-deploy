@@ -65,9 +65,14 @@ spec:
             exec: { command: [mongosh, --quiet, --eval, "db.adminCommand('ping').ok"] }
             periodSeconds: 5
             timeoutSeconds: 5
+          # Up to 10 minutes to start (journal recovery after an unclean stop); see postgres.yaml.
+          startupProbe:
+            exec: { command: [mongosh, --quiet, --eval, "db.adminCommand('ping').ok"] }
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 60
           livenessProbe:
             exec: { command: [mongosh, --quiet, --eval, "db.adminCommand('ping').ok"] }
-            initialDelaySeconds: 30
             periodSeconds: 15
             timeoutSeconds: 5
           resources: {{- toYaml .Values.mongo.resources | nindent 12 }}
