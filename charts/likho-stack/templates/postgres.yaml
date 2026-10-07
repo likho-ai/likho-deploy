@@ -16,15 +16,42 @@ data:
     CREATE ROLE likho_media    LOGIN PASSWORD '$LIKHO_MEDIA_DB_PASSWORD';
     CREATE ROLE likho_language LOGIN PASSWORD '$LIKHO_LANGUAGE_DB_PASSWORD';
     CREATE ROLE likho_connector LOGIN PASSWORD '$LIKHO_CONNECTOR_DB_PASSWORD';
+    CREATE ROLE likho_ml       LOGIN PASSWORD '$LIKHO_ML_DB_PASSWORD';
     CREATE DATABASE likho_api      OWNER likho_api;
     CREATE DATABASE likho_media    OWNER likho_media;
     CREATE DATABASE likho_language OWNER likho_language;
     CREATE DATABASE likho_connector OWNER likho_connector;
+    CREATE DATABASE likho_ml       OWNER likho_ml;
     REVOKE CONNECT ON DATABASE likho_api      FROM PUBLIC;
     REVOKE CONNECT ON DATABASE likho_media    FROM PUBLIC;
     REVOKE CONNECT ON DATABASE likho_language FROM PUBLIC;
     REVOKE CONNECT ON DATABASE likho_connector FROM PUBLIC;
+    REVOKE CONNECT ON DATABASE likho_ml       FROM PUBLIC;
     SQL
+  # The same, safe to run again: what a database that already has data lacks (a service added
+  # later). Run by the postgres-databases Job after every install and upgrade.
+  ensure.sh: |
+    #!/bin/sh
+    set -eu
+    export PGPASSWORD="$POSTGRES_PASSWORD"
+    psql -v ON_ERROR_STOP=1 -h postgres -U postgres -d postgres \
+      -v api="$LIKHO_API_DB_PASSWORD" -v media="$LIKHO_MEDIA_DB_PASSWORD" \
+      -v language="$LIKHO_LANGUAGE_DB_PASSWORD" -v connector="$LIKHO_CONNECTOR_DB_PASSWORD" \
+      -v ml="$LIKHO_ML_DB_PASSWORD" <<'SQL'
+    SELECT format('CREATE ROLE %I LOGIN PASSWORD %L', r.name, r.password)
+    FROM (VALUES ('likho_api', :'api'), ('likho_media', :'media'), ('likho_language', :'language'),
+                 ('likho_connector', :'connector'), ('likho_ml', :'ml')) AS r(name, password)
+    WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = r.name)
+    \gexec
+    SELECT format('CREATE DATABASE %I OWNER %I', name, name)
+    FROM unnest(ARRAY['likho_api', 'likho_media', 'likho_language', 'likho_connector', 'likho_ml']) AS name
+    WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = name)
+    \gexec
+    SELECT format('REVOKE CONNECT ON DATABASE %I FROM PUBLIC', name)
+    FROM unnest(ARRAY['likho_api', 'likho_media', 'likho_language', 'likho_connector', 'likho_ml']) AS name
+    \gexec
+    SQL
+    echo "every service's database is there"
 ---
 apiVersion: v1
 kind: Service
@@ -69,6 +96,8 @@ spec:
               valueFrom: { secretKeyRef: { name: {{ .Values.secrets.name }}, key: LIKHO_LANGUAGE_DB_PASSWORD } }
             - name: LIKHO_CONNECTOR_DB_PASSWORD
               valueFrom: { secretKeyRef: { name: {{ .Values.secrets.name }}, key: LIKHO_CONNECTOR_DB_PASSWORD } }
+            - name: LIKHO_ML_DB_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ .Values.secrets.name }}, key: LIKHO_ML_DB_PASSWORD } }
           volumeMounts:
             - { name: data, mountPath: /var/lib/postgresql/data }
             - { name: init, mountPath: /docker-entrypoint-initdb.d, readOnly: true }
@@ -89,11 +118,53 @@ spec:
           resources: {{- toYaml .Values.postgres.resources | nindent 12 }}
       volumes:
         - name: init
-          configMap: { name: postgres-init, defaultMode: 0555 }
+          # Only the first-start script: the entrypoint runs every script in that folder, and
+          # ensure.sh needs the server up (the postgres-databases Job runs it).
+          configMap:
+            name: postgres-init
+            defaultMode: 0555
+            items: [{ key: 10-users.sh, path: 10-users.sh }]
   volumeClaimTemplates:
     - metadata: { name: data }
       spec:
         accessModes: [ReadWriteOnce]
         {{- include "likho-stack.storageClass" . | nindent 8 }}
         resources: { requests: { storage: {{ .Values.postgres.storage }} } }
+---
+# After every install and upgrade: every service's login and database, created if missing - a
+# database that already has data gets the service added since (the init script ran only once).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: postgres-databases
+  labels: {{- include "likho-stack.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 10            # PostgreSQL may still be starting on a first install
+  template:
+    metadata:
+      labels: {{- include "likho-stack.selector" "postgres-databases" | nindent 8 }}
+    spec:
+      restartPolicy: OnFailure
+      securityContext:
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: ensure
+          image: {{ .Values.postgres.image | quote }}
+          command: [sh, /scripts/ensure.sh]
+          env:
+            {{- range $key := list "POSTGRES_PASSWORD" "LIKHO_API_DB_PASSWORD" "LIKHO_MEDIA_DB_PASSWORD" "LIKHO_LANGUAGE_DB_PASSWORD" "LIKHO_CONNECTOR_DB_PASSWORD" "LIKHO_ML_DB_PASSWORD" }}
+            - name: {{ $key }}
+              valueFrom: { secretKeyRef: { name: {{ $.Values.secrets.name }}, key: {{ $key }} } }
+            {{- end }}
+          volumeMounts:
+            - { name: scripts, mountPath: /scripts, readOnly: true }
+          resources:
+            requests: { cpu: 10m, memory: 32Mi }
+            limits: { memory: 128Mi }
+      volumes:
+        - name: scripts
+          configMap: { name: postgres-init, items: [{ key: ensure.sh, path: ensure.sh }] }
 {{- end }}

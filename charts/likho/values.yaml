@@ -100,7 +100,8 @@ services:
     secret: likho-transcription-secrets
     config: {}
     env: {}
-    ingressFrom: [likho-api, likho-search, likho-insights]
+    # likho-ml: corrected lines for training examples, and evaluation transcriptions
+    ingressFrom: [likho-api, likho-search, likho-insights, likho-ml]
     # A stopping pod finishes the job in hand first; a long call takes minutes.
     terminationGracePeriodSeconds: 900
     # A StatefulSet, so every worker keeps a model cache of its own across restarts and scaling.
@@ -183,6 +184,25 @@ services:
     resources:
       requests: { cpu: 50m, memory: 64Mi }
       limits: { memory: 256Mi }
+
+  # The model service: the speech model registry and its default, the gold set and evaluations,
+  # training examples from corrections. One instance: its evaluation queue lives in the process
+  # (a second would fail the first one's evaluations at its start). Never autoscaled.
+  likho-ml:
+    image: ghcr.io/likho-ai/likho-ml:latest
+    replicas: 1
+    headless: true          # gRPC clients resolve the pods
+    ports: { http: 4080, grpc: 5080 }
+    readiness: { path: /readyz, port: http }
+    liveness: { path: /healthz, port: http }
+    secret: likho-ml-secrets
+    config: {}
+    env: {}
+    # likho-api (the admin screen), likho-transcription (which model is the default)
+    ingressFrom: [likho-api, likho-transcription]
+    resources:
+      requests: { cpu: 50m, memory: 96Mi }
+      limits: { memory: 384Mi }
 
   # The dialer connector: no port of its own but health; it reaches likho-api through the gateway.
   likho-connector-ameyo:
