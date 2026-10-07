@@ -3,7 +3,7 @@
 #
 # Secrets come from one Secret made by scripts/secrets.py from likho-infra/.env.<environment>.local:
 #   POSTGRES_PASSWORD, LIKHO_API_DB_PASSWORD, LIKHO_MEDIA_DB_PASSWORD, LIKHO_LANGUAGE_DB_PASSWORD,
-#   LIKHO_CONNECTOR_DB_PASSWORD,
+#   LIKHO_CONNECTOR_DB_PASSWORD, LIKHO_ML_DB_PASSWORD,
 #   MONGO_ROOT_PASSWORD, MONGO_PASSWORD, S3_ACCESS_KEY, S3_SECRET_KEY, MEILI_MASTER_KEY, CLICKHOUSE_PASSWORD
 # plus a second Secret holding SeaweedFS's s3.json (the same S3 keys, in the file format it reads).
 secrets:

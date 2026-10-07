@@ -39,6 +39,8 @@ build:
       context: ../likho-insights
     - image: ghcr.io/likho-ai/likho-analytics
       context: ../likho-analytics
+    - image: ghcr.io/likho-ai/likho-ml
+      context: ../likho-ml
     - image: ghcr.io/likho-ai/likho-web-shell
       context: ../likho-web-shell
     - image: ghcr.io/likho-ai/likho-mfe-library
